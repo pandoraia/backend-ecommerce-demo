@@ -8,6 +8,7 @@ client = AsyncIOMotorClient(
     tlsCAFile=certifi.where()
 )
 db = client[settings.mongo_db_name] 
+admin_collection = db['admins']
 
 async def connect_to_mongo():
     try:
