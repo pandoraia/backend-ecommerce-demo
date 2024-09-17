@@ -1,30 +1,35 @@
-from pydantic import BaseModel, Field
-from typing import Optional
-from bson import ObjectId
+from typing import List, Dict, Optional
+from pydantic import BaseModel, constr
 
-class PyObjectId(ObjectId):
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v):
-        if not ObjectId.is_valid(v):
-            raise ValueError('Invalid objectid')
-        return ObjectId(v)
-
-    @classmethod
-    def __get_pydantic_json_schema__(cls, schema, _model):
-        # En Pydantic v2, se usa este método para modificar el esquema JSON
-        schema.update(type="string")
-        return schema
-
-# Definimos el modelo de Producto
-class Product(BaseModel):
-    id: Optional[PyObjectId] = Field(alias="_id")  # Para MongoDB, el campo _id es tratado como ObjectId
+class Translation(BaseModel):
     name: str
+    description: str
+    category: str
+    subCategory: str
 
-    class Config:
-        # Cambiado de allow_population_by_field_name a populate_by_name
-        populate_by_name = True
-        json_encoders = {ObjectId: str}  # Cuando devuelves _id, lo devuelve como un string en JSON
+class VariantAttribute(BaseModel):
+    key: str
+    value: str
+
+class Variant(BaseModel):
+    translations: Dict[str, List[VariantAttribute]]
+    stock: Optional[int] = None
+
+class Tags(BaseModel):
+    en: List[str]
+    es: List[str]
+    fr: List[str]
+    de: List[str]
+
+class Product(BaseModel):
+    slug: str
+    translations: Dict[str, Translation]
+    price: float
+    brand: str
+    sku: str
+    stock: Optional[int] = None
+    images: List[str]
+    variants: List[Variant]
+    tags: Tags
+    rating: Optional[float] = None
+    reviews: Optional[List[Dict]] = None
