@@ -1,11 +1,16 @@
-# models.py
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 from bson import ObjectId
 
+class Translations(BaseModel):
+    en: str
+    es: str
+    fr: str
+    de: str
+
 class CategoryBase(BaseModel):
-    categoryName: str
-    subcategories: List[str]
+    categoryName: Translations
+    subcategories: List[Dict[str, Translations]]
 
 class CategoryCreate(CategoryBase):
     pass

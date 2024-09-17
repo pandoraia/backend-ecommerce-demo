@@ -25,7 +25,7 @@ app.include_router(products.router, prefix="/api/v1/products", tags=["Products"]
 app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
 app.include_router(orders.router, prefix="/api/v1/orders", tags=["Orders"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
-app.include_router(categories.router, prefix="/categories", tags=["categories"])
+app.include_router(categories.router, prefix="/api/v1/categories", tags=["Categories"])
 
 @app.get("/")
 async def ping():
