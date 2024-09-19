@@ -1,11 +1,23 @@
-# app/models/user.py
-from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
+from pydantic import BaseModel
 from datetime import datetime
+from typing import Optional
 
-class Admin(BaseModel):
+class RegisterAdmin(BaseModel):
     name: str
-    email: EmailStr
-    hashed_password: str
+    email: str
+    password: str
     profile_image_url: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class AdminResponse(BaseModel):
+    id: str
+    name: str
+    email: str
+    profile_image_url: Optional[str] = None
+    created_at: datetime
+
+class Admin(BaseModel):  # Añadir esta clase si es necesario
+    id: str
+    name: str
+    email: str
+    profile_image_url: Optional[str] = None
+    created_at: datetime

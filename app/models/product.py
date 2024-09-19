@@ -33,3 +33,18 @@ class Product(BaseModel):
     tags: Tags
     rating: Optional[float] = None
     reviews: Optional[List[Dict]] = None
+
+
+class ProductOut(BaseModel):
+    id: str  # ID convertido a cadena
+    slug: str
+    translations: Dict[str, Translation]
+    price: float
+    brand: str
+    sku: str
+    stock: Optional[int] = None
+    images: List[str]
+    variants: List[Variant]
+    tags: Tags
+    rating: Optional[float] = None
+    reviews: Optional[List[Dict]] = None
