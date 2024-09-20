@@ -6,6 +6,7 @@ class Translation(BaseModel):
     description: str
     category: str
     subCategory: str
+    destovect:str
 
 class VariantAttribute(BaseModel):
     key: str
