@@ -34,6 +34,7 @@ class Product(BaseModel):
     tags: Tags
     rating: Optional[float] = None
     reviews: Optional[List[Dict]] = None
+    embeddings: Optional[Dict[str, Dict[str, list]]] = None 
 
 
 class ProductOut(BaseModel):
@@ -49,3 +50,4 @@ class ProductOut(BaseModel):
     tags: Tags
     rating: Optional[float] = None
     reviews: Optional[List[Dict]] = None
+    # embeddings: Optional[Dict[str, Dict[str, list]]] = None

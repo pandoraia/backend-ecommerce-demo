@@ -24,7 +24,7 @@ async def get_product(slug: str):
 @router.post("/", response_model=Product)
 async def add_product(
     product: Product,
-    current_admin: dict = Depends(get_current_admin)
+    # current_admin: dict = Depends(get_current_admin)
 ):
     try:
         new_product = await create_product(product)
