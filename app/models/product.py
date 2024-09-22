@@ -1,3 +1,4 @@
+# app/models/product.py
 from typing import List, Dict, Optional
 from pydantic import BaseModel, constr
 
@@ -34,7 +35,7 @@ class Product(BaseModel):
     tags: Tags
     rating: Optional[float] = None
     reviews: Optional[List[Dict]] = None
-    embeddings: Optional[Dict[str, Dict[str, list]]] = None 
+    # embeddings: Optional[Dict[str, Dict[str, list]]] = None 
 
 
 class ProductOut(BaseModel):

@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from app.models.product import Product, ProductOut
 from app.core.auth import get_current_admin
-from app.services.product_service import get_all_products, create_product, get_product_by_slug
+from app.services.product_service import get_all_products, create_product, get_product_by_slug,update_product_by_slug
 from typing import List
 router = APIRouter()
 
@@ -32,3 +32,19 @@ async def add_product(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
+@router.put("/{slug}", response_model=ProductOut)
+async def edit_product(
+    slug: str,
+    product: Product,
+    # current_admin: dict = Depends(get_current_admin)  # Añadir autenticación si es necesario
+):
+    existing_product = await get_product_by_slug(slug)
+    if not existing_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    try:
+        updated_product = await update_product_by_slug(slug, product)
+        return updated_product
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

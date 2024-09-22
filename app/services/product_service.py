@@ -32,7 +32,7 @@ async def create_product(product: Product) -> Dict[str, Any]:
     embeddings = await generate_product_embeddings(product)
 
     # Agregar los embeddings al diccionario del producto
-    product_dict['embeddings'] = embeddings
+    # product_dict['embeddings'] = embeddings
 
     # Inserta el producto en la base de datos
     result = await products_collection.insert_one(product_dict)
@@ -40,3 +40,28 @@ async def create_product(product: Product) -> Dict[str, Any]:
     # Recupera el producto creado usando el ID del resultado
     created_product = await products_collection.find_one({"_id": result.inserted_id})
     return created_product
+
+async def update_product_by_slug(slug: str, updated_product: Product) -> ProductOut:
+    """Actualiza un producto existente utilizando el slug como identificador."""
+    
+    # Convertir el producto actualizado en un diccionario
+    updated_product_dict = updated_product.dict()
+
+    # Generar embeddings nuevamente si es necesario
+    embeddings = await generate_product_embeddings(updated_product)
+    # updated_product_dict['embeddings'] = embeddings
+
+    # Intentar encontrar y actualizar el producto por slug
+    result = await products_collection.update_one(
+        {"slug": slug},
+        {"$set": updated_product_dict}
+    )
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    # Recuperar el producto actualizado
+    updated_product_data = await products_collection.find_one({"slug": slug})
+    
+    # Serializar el producto actualizado
+    return product_serializer(updated_product_data)
