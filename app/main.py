@@ -1,7 +1,7 @@
 # app/main.py
 from fastapi import FastAPI
 from app.db.database import connect_to_mongo, close_mongo_connection
-from app.api.v1.routes import products, users, orders, admin, categories
+from app.api.v1.routes import products, users, orders, admin, categories, chatbot
 from app.core import auth
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -27,6 +27,7 @@ app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
 app.include_router(orders.router, prefix="/api/v1/orders", tags=["Orders"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
 app.include_router(categories.router, prefix="/api/v1/categories", tags=["Categories"])
+app.include_router(chatbot.router, prefix="/chatbot", tags=["Chatbot"])
 
 @app.get("/")
 async def ping():
