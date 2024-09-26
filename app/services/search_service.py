@@ -44,15 +44,14 @@ class SearchService:
         # Generate a standalone question
         standalone_question = await SearchService.generate_standalone_question(user_query)
         print(f"Here is the standalone question: >>> {standalone_question}")
-
+        
         # Generate embedding for the standalone question
         embedding = embedder.embed_query(standalone_question)
-
         # Search Pinecone index
         results = index.query(vector=embedding, top_k=3)  # Adjust top_k as necessary
         
         # print(results)
-
+        
         # Extract product metadata
         recommended_products = []
         for match in results['matches']:
@@ -83,7 +82,6 @@ class SearchService:
         # # product_complementari_2 = await get_product_by_slug(slug_complementari_2)
         # print(product_principal)
         
-
         return recommended_products
 
     @staticmethod

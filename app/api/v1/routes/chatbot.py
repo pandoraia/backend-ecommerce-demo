@@ -8,9 +8,6 @@ router = APIRouter()
 async def handle_user_query(query: str):
     # Step 1: Search for products using the user's query
     recommended_products = await SearchService.search_products_by_query(query)
-    
-    
-    
     # product = await get_product_by_slug(slug)
     
     # Extract the top recommended product and complementary products
