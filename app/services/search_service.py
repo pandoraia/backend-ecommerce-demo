@@ -1,69 +1,143 @@
+# app/services/search-services.py
 from langchain_openai import OpenAI
+from langchain_pinecone import PineconeVectorStore 
+from langchain_openai import OpenAIEmbeddings
 from app.services.vectorization_service import embedder, index
 from typing import List, Dict, Any
 from langchain_openai import ChatOpenAI
 from app.core.config import settings
-from langchain.prompts import PromptTemplate
+from langchain.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
 from langchain.chains import LLMChain
 import logging
 from app.services.product_service import get_product_by_slug
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain.chains import create_history_aware_retriever
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
 
-# Initialize OpenAI model
+
+# Crea el VectorStore para Pinecone con LangChain
+pinecone_vector_store = PineconeVectorStore(index, embedder, text_key='product_slug')
+
+# Crear el retriever utilizando el adaptador de LangChain
+history_aware_retriever = pinecone_vector_store.as_retriever()
+
+# Inicializa el modelo OpenAI
 llm = ChatOpenAI(openai_api_key=settings.openai_api_key)
 
-# Create standalone question prompt template
-standalone_question_template = """Given some question, convert the question to a standalone question. 
-question: {question}
-standalone question:"""
+# Create standalone question prompt templates
+standalone_question_template = """
+Your task is to reformulate the given user question into a standalone question that sounds natural, as if the user is directly asking it. 
+
+Ensure that the standalone question makes sense on its own, without requiring any previous context. Preserve the user's original intent, details, and nuances, but make it clear and self-contained, as if it's the first time the question is being asked.
+
+If the original question is already self-explanatory, refine it slightly to make it sound more natural and conversational.
+
+**Original User Question:** {question}
+
+**Standalone Reformulated Question:** 
+"""
 standalone_question_prompt = PromptTemplate.from_template(
     standalone_question_template)
 
-# Updated answer prompt template
-answer_template = """You are the top sales assistant specializing in providing clear and effective responses to guide customers in purchasing sports products from Pandorifit. Use the following products and their descriptions to provide a precise recommendation that answers the customer's question and highlights the product `{recommended_product}` as the best choice.
 
-If the customer's question is not related to sports products, training, or health advice, kindly inform them that you can only assist with recommendations for sports products from Pandorifit.
 
-Please recommend the best product `{recommended_product}` that meets the customer's needs, explaining why it is the most suitable option.
 
-Examples:
+answer_template = """You are a helpful sales assistant for Pandorifit, specializing in guiding customers to find the best sports products. Answer the customer's question in a friendly and concise manner, highlighting why one of the products from the list is the best choice.
 
-**Example 1: Weighted Vest**
-Customer: "I'm looking for something to intensify my bodyweight workouts. What do you recommend?"  
-Chatbot: "Absolutely! To increase the intensity of your bodyweight workouts, I recommend our weighted vest. It's perfect for exercises like squats, push-ups, and pull-ups, adding extra resistance to enhance your strength and endurance. Would you like more details on the available weights or how to incorporate it into your routine?"
+Consider all the products listed below, and choose the one that best fits the customer's needs based on their question. Explain your reasoning for why this product is the most suitable.
 
-**Example 2: Speed Rope**
-Customer: "I want to improve my speed and cardiovascular endurance, but I'm not sure what equipment is best for that."  
-Chatbot: "Great choice! To improve your speed and cardiovascular endurance, our speed rope is ideal. It's perfect for high-intensity workouts like crossfit or for those looking for quick calorie-burning sessions. Would you like to learn some exercises or techniques you can do with it?"
+If the customer's question is not about sports products, training, or health advice, politely inform them that you can only assist with Pandorifit's sports products.
 
-**Example 3: Kettlebell**
-Customer: "I'm looking for something that helps me work on both strength and cardio at home, any suggestions?"  
-Chatbot: "For a versatile workout that combines strength and cardio, our kettlebells are a fantastic option. They allow you to do exercises like swings, squats, and snatches, targeting multiple muscle groups while improving your cardiovascular endurance. Would you like advice on the most suitable weight for you or how to integrate it into your routine?"
+Keep your answer brief, friendly, and conversational. If it makes sense, you can suggest another product from the list as an additional recommendation.
 
-**Example 4: Resistance Bands**
-Customer: "I need equipment that is easy to store and use at home but also effective for full-body workouts."  
-Chatbot: "For full-body workouts that you can easily do at home, I recommend our resistance bands. They are compact, versatile, and can be used for a wide range of exercises, from strength training to stretching. Would you like suggestions on specific exercises for different muscle groups?"
+**Products List:** 
+{products_list}
 
-**Example 5: Foam Roller**
-Customer: "I'm looking for something that can help with muscle recovery after intense workouts. What would you suggest?"  
-Chatbot: "For effective muscle recovery, I highly recommend our foam roller. It's perfect for easing muscle tension, improving flexibility, and speeding up recovery after intense workouts. Would you like to know how to use it effectively for different muscle groups?"
-
-**Important notes:**
-1. The response must be given in the same language the customer uses to ask their question.
-2. If relevant and logical, suggest complementary products to help the customer achieve better results in their training or health.
-
-**Additional example:**
-Customer: "I want to improve my physical endurance, but I don't have much time to train."  
-Chatbot: "To improve your endurance in short sessions, I recommend our speed rope. It's great for high-intensity workouts that quickly boost cardiovascular capacity. Additionally, you can complement your routine with a kettlebell `{complementary_products}`, which helps build strength while you continue improving your endurance. Would you like to know how to combine them into an effective routine?"
-
-**Main product recommendation:** {recommended_product}  
-**Complementary products:** {complementary_products}  
 **Customer question:** {question}  
+**Chat History:**  
+{chat_history}
+**Context:**  
+{context}
 **Answer:**
- """
-answer_prompt = PromptTemplate.from_template(answer_template)
+"""
+# answer_prompt = PromptTemplate.from_template(answer_template)
+
+# Crea el ChatPromptTemplate para manejar el historial de chat
+# chat_history_placeholder = MessagesPlaceholder(variable_name="chat_history")
+
+# Store para el historial de la sesión
+session_store = {}
+def add_message_to_history(chat_history_instance, message_type, message_content):
+    """Agrega un mensaje al historial de chat, asegurándose de que no esté duplicado."""
+    existing_messages = [msg.content for msg in chat_history_instance.messages if msg.type == message_type]
+    if message_content not in existing_messages:
+        if message_type == "human":
+            chat_history_instance.add_user_message(message_content)
+        elif message_type == "ai":
+            chat_history_instance.add_ai_message(message_content)
+
+def get_or_create_session_id(session_id: str = None) -> str:
+    """
+    Obtiene un session_id existente o crea uno nuevo si no se proporciona.
+
+    Args:
+        session_id (str): El identificador de la sesión, si se proporciona.
+
+    Returns:
+        str: El identificador de la sesión.
+    """
+    if session_id is None or session_id not in session_store:
+        session_id = session_id or "default_session"
+        if session_id not in session_store:
+            session_store[session_id] = ChatMessageHistory()
+    return session_id
+
+def get_session_history(session_id: str) -> BaseChatMessageHistory:
+    if session_id not in session_store:
+        session_store[session_id] = ChatMessageHistory()
+    return session_store[session_id]
+
+
+
+
+# Crea el ChatPromptTemplate con historial
+contextual_answer_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", answer_template),
+        MessagesPlaceholder("chat_history"),  # Agregamos historial de chat como placeholder
+        ("human", "{question}"),
+    ]
+)
+
+contextualize_q_system_prompt = (
+    "Given a chat history and the latest user question "
+    "which might reference context in the chat history, "
+    "formulate a standalone question which can be understood "
+    "without the chat history. Do NOT answer the question, "
+    "just reformulate it if needed and otherwise return it as is."
+)
+
+contextualize_q_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", contextualize_q_system_prompt),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ]
+)
+
+
+
 
 
 class SearchService:
+    
+    chat_history: List[Dict[str, str]] = [] 
+    
+    # print(chat_history)
+    
     @staticmethod
     async def generate_standalone_question(question: str) -> str:
         """Generate a standalone question from a user query"""
@@ -77,102 +151,122 @@ class SearchService:
         return standalone_question
 
     @staticmethod
-    async def search_products_by_query(user_query: str) -> List[Dict[str, Any]]:
+    async def search_products_by_query(user_query: str, session_id: str = None) -> List[Dict[str, Any]]:
         """Search for products using a standalone question and Pinecone."""
+        # Obtener o crear el session_id
+        session_id = get_or_create_session_id(session_id)
+        chat_history_instance = get_session_history(session_id)
+        add_message_to_history(chat_history_instance, "human", user_query)
+
         # Generar una pregunta autónoma
         standalone_question = await SearchService.generate_standalone_question(user_query)
         print(f"Here is the standalone question: >>> {standalone_question}")
 
         # Generar embedding para la pregunta autónoma
         embedding = embedder.embed_query(standalone_question)
-        # Ajusta top_k según sea necesario
-        results = index.query(vector=embedding, top_k=2)
+        results = index.query(vector=embedding, top_k=10)
 
-        # Extraer los productos recomendados
+        # Extraer todos los productos recomendados
         recommended_products = []
+        seen_product_slugs = set() 
         for match in results['matches']:
-            recommended_products.append({"id": match['id']})
+            product_slug = match['id'].split("_")[0]
+            product_lang = match['id'].split("_")[1]
+                    # Verificamos si el producto ya ha sido procesado
+            if product_slug in seen_product_slugs:
+                continue  # Saltar si ya hemos visto este producto
 
-        if not recommended_products:
-            return []
+            # Añadimos el producto al conjunto para evitar futuros duplicados
+            seen_product_slugs.add(product_slug)
+            product_details = await get_product_by_slug(product_slug)
 
-        # Procesar la recomendación principal
-        main_recommendation = recommended_products[0]['id']
-        complementary_recommendations = [product['id']
-                                         for product in recommended_products[1:]]
+            # Acceder a la traducción del producto basada en el idioma
+            product_translations = product_details.translations
+            selected_translation = product_translations.get(product_lang) or product_translations.get('en', {})
 
-        # Procesar la recomendación principal
-        main_recommendation_slug = main_recommendation.split("_")[0]
-        main_recommendation_lang = main_recommendation.split("_")[1]
+            product_name = selected_translation.name if selected_translation else "Nombre no disponible"
+            product_description = selected_translation.description if selected_translation else "Descripción no disponible"
 
-        main_recommendation_product_details = await get_product_by_slug(main_recommendation_slug)
-
-        # Acceder a la traducción basada en el idioma extraído
-        product_translations = main_recommendation_product_details.translations
-        selected_translation = product_translations.get(
-            main_recommendation_lang) or product_translations.get('en', {})
-
-        product_name = selected_translation.name if selected_translation else "Nombre no disponible"
-        product_description = selected_translation.description if selected_translation else "Descripción no disponible"
-
-        print(f"Producto recomendado: {product_name}")
-        print(f"Descripción: {product_description}")
-
-        main_product_details = {
-            "name": product_name,
-            "description": product_description,
-            "image_url": main_recommendation_product_details.images
-        }
-
-        # Ahora procesamos las recomendaciones complementarias
-        complementary_product_details = []
-
-        for complementary_id in complementary_recommendations:
-            complementary_slug = complementary_id.split("_")[0]
-            complementary_lang = complementary_id.split("_")[1]
-
-            # Cambiamos el nombre de la variable para evitar sobrescribir la lista
-            complementary_product_obj = await get_product_by_slug(complementary_slug)
-
-            # Acceder a la traducción del producto complementario basada en el idioma extraído
-            complementary_translations = complementary_product_obj.translations
-            complementary_selected_translation = complementary_translations.get(
-                complementary_lang) or complementary_translations.get('en', {})
-
-            complementary_name = complementary_selected_translation.name if complementary_selected_translation else "Nombre no disponible"
-            complementary_description = complementary_selected_translation.description if complementary_selected_translation else "Descripción no disponible"
-
-            # Añadir los detalles del producto complementario a la lista
-            complementary_product_details.append({
-                "name": complementary_name,
-                "description": complementary_description,
-                # "category": complementary_product_obj.category,
-                # "subCategory": complementary_product_obj.subCategory
-                "image_url": complementary_product_obj.images
-
+            recommended_products.append({
+                "slug": product_slug,
+                "lang": product_lang,
+                "name": product_name,
+                "description": product_description,
+                "image_url": product_details.images
             })
+            # Salimos del bucle si ya tenemos 5 productos únicos
+            if len(recommended_products) >= 5:
+                break
 
-            print(f"Producto complementario: {complementary_name}")
-            print(f"Descripción: {complementary_description}")
-
-        # Ahora puedes devolver los productos recomendados y complementarios
-        return {
-            "main_product": main_product_details,
-            "complementary_products": complementary_product_details
-        }
+        return recommended_products
 
     @staticmethod
-    async def generate_answer(recommended_product: str, complementary_products: str, question: str) -> str:
-        """Generate a final answer to the user's question based on the recommended and complementary products."""
-        prompt_input = {
-            "recommended_product": recommended_product,
-            "complementary_products": complementary_products,
-            "question": question
+    async def generate_answer(products_list: List[Dict[str, Any]], question: str, session_id: str = None) -> str:
+        """Generate a final answer to the user's question based on the list of recommended products."""
+    
+        # Obtener o crear el session_id
+        session_id = get_or_create_session_id(session_id)
+        chat_history_instance = get_session_history(session_id)
+        
+
+        # Preparar la lista de productos en formato de texto para el prompt
+        formatted_products_list = "\n".join([f"- {product['name']}: {product['description']}" for product in products_list])
+
+        combined_prompt_input = {
+            "products_list": formatted_products_list,
+            "question": question,
+            "chat_history": chat_history_instance.messages,
+            "context": "Información relevante del contexto, si la tienes."
         }
+
         try:
-            chain = LLMChain(llm=llm, prompt=answer_prompt)
-            answer = await chain.apredict(**prompt_input)
+            # Step 1: Crear un retriever basado en el historial de chat para contexto adicional
+            history_aware_retriever = create_history_aware_retriever(
+                llm=llm,
+                retriever=pinecone_vector_store.as_retriever(), 
+                prompt=contextualize_q_prompt
+            )
+
+            # Step 2: Crear una cadena de documentos para combinar respuestas
+            document_chain = create_stuff_documents_chain(
+                llm=llm,
+                prompt=contextual_answer_prompt
+            )
+
+            # Step 3: Crear una cadena de recuperación y generación de respuestas
+            rag_chain = create_retrieval_chain(
+                history_aware_retriever,
+                document_chain
+            )
+
+            # Step 4: Ejecutar la cadena conversacional con el historial de mensajes
+            conversational_chain = RunnableWithMessageHistory(
+                rag_chain,
+                get_session_history,
+                input_messages_key="input",
+                history_messages_key="chat_history",
+                output_messages_key="answer"
+            )
+
+            # Ejecutar el flujo con la entrada más reciente
+            response = conversational_chain.invoke(
+                {
+                    "chat_history": chat_history_instance.messages,
+                    "products_list": formatted_products_list,
+                    "question": question,
+                    "context": "Información relevante del contexto, si la tienes.",
+                    "input": question
+                },
+                config={"configurable": {"session_id": session_id}},
+            )
+
+            response_text = response.get("answer", "")
+            print(response_text)
+            if response_text:
+                add_message_to_history(chat_history_instance, "ai", response_text)
+
         except Exception as e:
             logging.error(f"Error generating answer: {e}")
             raise
-        return answer
+
+        return response
