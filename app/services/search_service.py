@@ -1,4 +1,5 @@
 # app/services/search-services.py
+import numpy as np
 from langchain_openai import OpenAI
 from langchain_pinecone import PineconeVectorStore
 from langchain_openai import OpenAIEmbeddings
@@ -56,14 +57,14 @@ If the user asks questions that are not related to Pandorafit products, kindly i
 Always keep your response professional, ethical, empathetic, and solution-focused. 
 Respond concisely, using a maximum of three sentences, and only recommend products that you have available.
 It is important to always respond in the language in which the person writes to you.
-**Products List:** 
-From this {products_list}, take the main product that most closely matches the customer's question or need and store it in the {principal_product} variable. The remaining products in the product list that are different from the main product are stored in the {secondary_products} variable.
 
-**Customer question:** {question}  
 
-**Context:**  
+Identify the product that most closely matches the customer's question or need from the {principal_product} variable, and suggest it as the primary recommendation. The other products in the {secondary_products} variable should be offered subtly as additional suggestions that could also meet the customer's needs.
+
+*Customer question:* {question}  
+*Context:*  
 {context}
-**Answer:**
+*Answer:*
 """
 # answer_prompt = PromptTemplate.from_template(answer_template)
 
@@ -135,6 +136,13 @@ contextualize_q_prompt = ChatPromptTemplate.from_messages(
 )
 
 
+def cosine_similarity(vec_a, vec_b):
+    """Calculate cosine similarity between two vectors."""
+    a = np.array(vec_a)
+    b = np.array(vec_b)
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+
 class SearchService:
 
     chat_history: List[Dict[str, str]] = []
@@ -191,22 +199,40 @@ class SearchService:
             product_name = selected_translation.name if selected_translation else "Nombre no disponible"
             product_description = selected_translation.description if selected_translation else "Descripción no disponible"
 
+            product_embedding = embedder.embed_query(product_description)
+
             recommended_products.append({
                 "slug": product_slug,
                 "lang": product_lang,
                 "name": product_name,
                 "description": product_description,
                 "image_url": product_details.images,
-
+                "embedding": product_embedding
             })
             # Salimos del bucle si ya tenemos 5 productos únicos
             if len(recommended_products) >= 5:
                 break
 
-        return recommended_products
+        if recommended_products:
+            # Calcular la similitud entre la pregunta y las descripciones de los productos
+            query_embedding = embedder.embed_query(user_query)
+            for product in recommended_products:
+                product["similarity"] = cosine_similarity(
+                    query_embedding, product["embedding"])
+
+            # Ordenar productos por similitud y seleccionar principal y secundarios
+            recommended_products.sort(
+                key=lambda x: x["similarity"], reverse=True)
+            principal_product = recommended_products[0]
+            # Tomar los siguientes 4 como secundarios
+            secondary_products = recommended_products[1:5]
+
+            return principal_product, secondary_products
+
+        return None, []  # Retornar None si no hay productos recomendados
 
     @staticmethod
-    async def generate_answer(products_list: List[Dict[str, Any]], question: str, session_id: str = None) -> str:
+    async def generate_answer(principal_product: Dict[str, Any], secondary_products: List[Dict[str, Any]], question: str, session_id: str = None) -> str:
         """Generate a final answer to the user's question based on the list of recommended products."""
 
         # Obtener o crear el session_id
@@ -223,6 +249,13 @@ class SearchService:
             "chat_history": chat_history_instance.messages,
             "context": "Información relevante del contexto, si la tienes."
         }
+
+        formatted_products_principal = "\n".join(
+            [f"- {product['name']}: {product['description']}" for product in [principal_product]]
+        )
+        formatted_products_secundario = "\n".join(
+            [f"- {product['name']}: {product['description']}" for product in [principal_product]]
+        )
 
         try:
             # Step 1: Crear un retriever basado en el historial de chat para contexto adicional
@@ -258,28 +291,20 @@ class SearchService:
             response = conversational_chain.invoke(
                 {
                     "chat_history": chat_history_instance.messages,
-                    "principal_product": get_product_by_slug,
-
-                    "secondary_products": get_product_by_slug,
-                    "products_list": formatted_products_list,
+                    "principal_product": formatted_products_principal,
+                    "secondary_products": formatted_products_secundario,
                     "question": question,
                     "context": "Información relevante del contexto, si la tienes.",
                     "input": question
                 },
                 config={"configurable": {"session_id": session_id}},
             )
-            answer = response["answer"]
-            # de la respuesta creamos una variable que contenga la url de productos relaciondos a recomendar
-            principal_product = response.get(
-                "metadata", {}).get("product_principal", ""),
-            secundary_products = response.get(
-                "metadata", {}).get("secundary_products", ""),
 
-            return {
-                "answer": answer,
-                "principal_product": principal_product,
-                "secundary_products": secundary_products
-            }
+            response_text = response.get("answer", "")
+
+            if response_text:
+                add_message_to_history(
+                    chat_history_instance, "ai", response_text)
 
         except Exception as e:
             logging.error(f"Error generating answer: {e}")
