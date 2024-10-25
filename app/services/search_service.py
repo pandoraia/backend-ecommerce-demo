@@ -1,6 +1,6 @@
 # app/services/search-services.py
 from langchain_openai import OpenAI
-from langchain_pinecone import PineconeVectorStore 
+from langchain_pinecone import PineconeVectorStore
 from langchain_openai import OpenAIEmbeddings
 from app.services.vectorization_service import embedder, index
 from typing import List, Dict, Any
@@ -19,13 +19,15 @@ from langchain.chains import create_retrieval_chain
 
 
 # Crea el VectorStore para Pinecone con LangChain
-pinecone_vector_store = PineconeVectorStore(index, embedder, text_key='product_slug')
+pinecone_vector_store = PineconeVectorStore(
+    index, embedder, text_key='product_slug')
 
 # Crear el retriever utilizando el adaptador de LangChain
 history_aware_retriever = pinecone_vector_store.as_retriever()
 
 # Inicializa el modelo OpenAI
 llm = ChatOpenAI(openai_api_key=settings.openai_api_key)
+
 
 # Create standalone question prompt templates
 standalone_question_template = """
@@ -43,22 +45,22 @@ standalone_question_prompt = PromptTemplate.from_template(
     standalone_question_template)
 
 
+answer_template = """You are a professional sports coach and expert in selling sports products..
 
+Your role is to provide personalized advice based on the user's needs, offering Pandorafit products that can help them achieve their fitness goals.
 
-answer_template = """You are a helpful sales assistant for Pandorifit, specializing in guiding customers to find the best sports products. Answer the customer's question in a friendly and concise manner, highlighting why one of the products from the list is the best choice.
+If the user shares personal details, such as their fitness level or goals (e.g. losing weight or gaining muscle), adjust your recommendations accordingly, suggesting relevant and coherent products and advice that relate to what the user is asking you.
 
-Consider all the products listed below, and choose the one that best fits the customer's needs based on their question. Explain your reasoning for why this product is the most suitable.
-
-If the customer's question is not about sports products, training, or health advice, politely inform them that you can only assist with Pandorifit's sports products.
-
-Keep your answer brief, friendly, and conversational. If it makes sense, you can suggest another product from the list as an additional recommendation.
-
+or example, offer cardio equipment for weight loss, strength training equipment for gaining muscle, or flexibility aids for recovery, depending on the conversation.
+If the user asks questions that are not related to Pandorafit products, kindly inform them that you can only provide guidance on sports products in your inventory. 
+Always keep your response professional, ethical, empathetic, and solution-focused. 
+Respond concisely, using a maximum of three sentences, and only recommend products that you have available.
+It is important to always respond in the language in which the person writes to you.
 **Products List:** 
-{products_list}
+From this {products_list}, take the main product that most closely matches the customer's question or need and store it in the {principal_product} variable. The remaining products in the product list that are different from the main product are stored in the {secondary_products} variable.
 
 **Customer question:** {question}  
-**Chat History:**  
-{chat_history}
+
 **Context:**  
 {context}
 **Answer:**
@@ -70,14 +72,18 @@ Keep your answer brief, friendly, and conversational. If it makes sense, you can
 
 # Store para el historial de la sesión
 session_store = {}
+
+
 def add_message_to_history(chat_history_instance, message_type, message_content):
     """Agrega un mensaje al historial de chat, asegurándose de que no esté duplicado."""
-    existing_messages = [msg.content for msg in chat_history_instance.messages if msg.type == message_type]
+    existing_messages = [
+        msg.content for msg in chat_history_instance.messages if msg.type == message_type]
     if message_content not in existing_messages:
         if message_type == "human":
             chat_history_instance.add_user_message(message_content)
         elif message_type == "ai":
             chat_history_instance.add_ai_message(message_content)
+
 
 def get_or_create_session_id(session_id: str = None) -> str:
     """
@@ -95,19 +101,19 @@ def get_or_create_session_id(session_id: str = None) -> str:
             session_store[session_id] = ChatMessageHistory()
     return session_id
 
+
 def get_session_history(session_id: str) -> BaseChatMessageHistory:
     if session_id not in session_store:
         session_store[session_id] = ChatMessageHistory()
     return session_store[session_id]
 
 
-
-
 # Crea el ChatPromptTemplate con historial
 contextual_answer_prompt = ChatPromptTemplate.from_messages(
     [
         ("system", answer_template),
-        MessagesPlaceholder("chat_history"),  # Agregamos historial de chat como placeholder
+        # Agregamos historial de chat como placeholder
+        MessagesPlaceholder("chat_history"),
         ("human", "{question}"),
     ]
 )
@@ -129,15 +135,12 @@ contextualize_q_prompt = ChatPromptTemplate.from_messages(
 )
 
 
-
-
-
 class SearchService:
-    
-    chat_history: List[Dict[str, str]] = [] 
-    
+
+    chat_history: List[Dict[str, str]] = []
+
     # print(chat_history)
-    
+
     @staticmethod
     async def generate_standalone_question(question: str) -> str:
         """Generate a standalone question from a user query"""
@@ -168,11 +171,11 @@ class SearchService:
 
         # Extraer todos los productos recomendados
         recommended_products = []
-        seen_product_slugs = set() 
+        seen_product_slugs = set()
         for match in results['matches']:
             product_slug = match['id'].split("_")[0]
             product_lang = match['id'].split("_")[1]
-                    # Verificamos si el producto ya ha sido procesado
+            # Verificamos si el producto ya ha sido procesado
             if product_slug in seen_product_slugs:
                 continue  # Saltar si ya hemos visto este producto
 
@@ -182,7 +185,8 @@ class SearchService:
 
             # Acceder a la traducción del producto basada en el idioma
             product_translations = product_details.translations
-            selected_translation = product_translations.get(product_lang) or product_translations.get('en', {})
+            selected_translation = product_translations.get(
+                product_lang) or product_translations.get('en', {})
 
             product_name = selected_translation.name if selected_translation else "Nombre no disponible"
             product_description = selected_translation.description if selected_translation else "Descripción no disponible"
@@ -192,7 +196,8 @@ class SearchService:
                 "lang": product_lang,
                 "name": product_name,
                 "description": product_description,
-                "image_url": product_details.images
+                "image_url": product_details.images,
+
             })
             # Salimos del bucle si ya tenemos 5 productos únicos
             if len(recommended_products) >= 5:
@@ -203,14 +208,14 @@ class SearchService:
     @staticmethod
     async def generate_answer(products_list: List[Dict[str, Any]], question: str, session_id: str = None) -> str:
         """Generate a final answer to the user's question based on the list of recommended products."""
-    
+
         # Obtener o crear el session_id
         session_id = get_or_create_session_id(session_id)
         chat_history_instance = get_session_history(session_id)
-        
 
         # Preparar la lista de productos en formato de texto para el prompt
-        formatted_products_list = "\n".join([f"- {product['name']}: {product['description']}" for product in products_list])
+        formatted_products_list = "\n".join(
+            [f"- {product['name']}: {product['description']}" for product in products_list])
 
         combined_prompt_input = {
             "products_list": formatted_products_list,
@@ -223,7 +228,7 @@ class SearchService:
             # Step 1: Crear un retriever basado en el historial de chat para contexto adicional
             history_aware_retriever = create_history_aware_retriever(
                 llm=llm,
-                retriever=pinecone_vector_store.as_retriever(), 
+                retriever=pinecone_vector_store.as_retriever(),
                 prompt=contextualize_q_prompt
             )
 
@@ -246,12 +251,16 @@ class SearchService:
                 input_messages_key="input",
                 history_messages_key="chat_history",
                 output_messages_key="answer"
+
             )
 
             # Ejecutar el flujo con la entrada más reciente
             response = conversational_chain.invoke(
                 {
                     "chat_history": chat_history_instance.messages,
+                    "principal_product": get_product_by_slug,
+
+                    "secondary_products": get_product_by_slug,
                     "products_list": formatted_products_list,
                     "question": question,
                     "context": "Información relevante del contexto, si la tienes.",
@@ -259,14 +268,19 @@ class SearchService:
                 },
                 config={"configurable": {"session_id": session_id}},
             )
+            answer = response["answer"]
+            # de la respuesta creamos una variable que contenga la url de productos relaciondos a recomendar
+            principal_product = response.get(
+                "metadata", {}).get("product_principal", ""),
+            secundary_products = response.get(
+                "metadata", {}).get("secundary_products", ""),
 
-            response_text = response.get("answer", "")
-            print(response_text)
-            if response_text:
-                add_message_to_history(chat_history_instance, "ai", response_text)
+            return {
+                "answer": answer,
+                "principal_product": principal_product,
+                "secundary_products": secundary_products
+            }
 
         except Exception as e:
             logging.error(f"Error generating answer: {e}")
             raise
-
-        return response
