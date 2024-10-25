@@ -9,14 +9,19 @@ router = APIRouter()
 @router.post("/query")
 async def handle_user_query(query: str):
     # Step 1: Search for products using the user's query
-    recommended_products = await SearchService.search_products_by_query(query)
+    principal_product, secondary_products = await SearchService.search_products_by_query(query)
 
-    # Verificar si se encontraron productos
-        # Verificar si se encontraron productos
-    if not recommended_products:
+    # Step 2: Verificar si se encontró un producto principal
+    if not principal_product:
         return {"response": "Sorry, no products found.", "products": []}
 
-    # Step 2: Generar la respuesta final utilizando el producto principal y los complementarios
-    response = await SearchService.generate_answer(recommended_products, query)
+    # Step 3: Generar la respuesta final utilizando el producto principal y los complementarios
+    response = await SearchService.generate_answer(principal_product, secondary_products, query)
 
-    return {"response": response, "products": recommended_products}
+    return {
+        "response": response,
+        "products": {
+            "principal": principal_product,
+            "secondary": secondary_products
+        }
+    }
