@@ -1,6 +1,7 @@
 # app/services/search-services.py
+import numpy as np
 from langchain_openai import OpenAI
-from langchain_pinecone import PineconeVectorStore 
+from langchain_pinecone import PineconeVectorStore
 from langchain_openai import OpenAIEmbeddings
 from app.services.vectorization_service import embedder, index
 from typing import List, Dict, Any
@@ -17,15 +18,16 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 
-
 # Crea el VectorStore para Pinecone con LangChain
-pinecone_vector_store = PineconeVectorStore(index, embedder, text_key='product_slug')
+pinecone_vector_store = PineconeVectorStore(
+    index, embedder, text_key='product_slug')
 
 # Crear el retriever utilizando el adaptador de LangChain
 history_aware_retriever = pinecone_vector_store.as_retriever()
 
 # Inicializa el modelo OpenAI
-llm = ChatOpenAI(openai_api_key=settings.openai_api_key)
+llm = ChatOpenAI(model="gpt-4o", temperature=0.1,
+                 openai_api_key=settings.openai_api_key)
 
 # Create standalone question prompt templates
 standalone_question_template = """
@@ -43,8 +45,6 @@ standalone_question_prompt = PromptTemplate.from_template(
     standalone_question_template)
 
 
-
-
 answer_template = """You are a professional sports coach and expert in selling sports products..
 
 Your role is to provide personalized advice based on the user's needs, offering Pandorafit products that can help them achieve their fitness goals.
@@ -54,8 +54,19 @@ If the user shares personal details, such as their fitness level or goals (e.g. 
 or example, offer cardio equipment for weight loss, strength training equipment for gaining muscle, or flexibility aids for recovery, depending on the conversation.
 If the user asks questions that are not related to Pandorafit products, kindly inform them that you can only provide guidance on sports products in your inventory. 
 Always keep your response professional, ethical, empathetic, and solution-focused. 
+, ask follow-up questions if necessary to clarify their needs and make your recommendations more personalized.
+
+For example:
+- If the customer is interested in protein supplements, ask about their preferred flavor or dietary restrictions.
+- If they are looking for exercise equipment, ask about their fitness level, space constraints, or specific training goals.
 Respond concisely, using a maximum of three sentences, and only recommend products that you have available.
 It is important to always respond in the language in which the person writes to you.
+
+Analyze the question carefully:
+- If the question is highly relevant to a specific product or goal, recommend the primary product ({principal_product}) and, if beneficial, suggest additional options from the secondary products ({secondary_products}).
+- If the question does not directly indicate a need for product recommendations (e.g., questions about prices, general inquiries, or follow-up questions on previously recommended products), avoid suggesting any products and respond only with relevant text information.
+
+Identify the product that most closely matches the customer's question or need from the {principal_product} variable, and suggest it as the primary recommendation. The other products in the {secondary_products} variable should be offered subtly as additional suggestions that could also meet the customer's needs when relevant.
 
 
 Identify the product that most closely matches the customer's question or need from the {principal_product} variable, and suggest it as the primary recommendation. The other products in the {secondary_products} variable should be offered subtly as additional suggestions that could also meet the customer's needs.
@@ -65,21 +76,21 @@ Identify the product that most closely matches the customer's question or need f
 {context}
 *Answer:*
 """
-# answer_prompt = PromptTemplate.from_template(answer_template)
-
-# Crea el ChatPromptTemplate para manejar el historial de chat
-# chat_history_placeholder = MessagesPlaceholder(variable_name="chat_history")
 
 # Store para el historial de la sesión
 session_store = {}
+
+
 def add_message_to_history(chat_history_instance, message_type, message_content):
     """Agrega un mensaje al historial de chat, asegurándose de que no esté duplicado."""
-    existing_messages = [msg.content for msg in chat_history_instance.messages if msg.type == message_type]
+    existing_messages = [
+        msg.content for msg in chat_history_instance.messages if msg.type == message_type]
     if message_content not in existing_messages:
         if message_type == "human":
             chat_history_instance.add_user_message(message_content)
         elif message_type == "ai":
             chat_history_instance.add_ai_message(message_content)
+
 
 def get_or_create_session_id(session_id: str = None) -> str:
     """
@@ -97,19 +108,19 @@ def get_or_create_session_id(session_id: str = None) -> str:
             session_store[session_id] = ChatMessageHistory()
     return session_id
 
+
 def get_session_history(session_id: str) -> BaseChatMessageHistory:
     if session_id not in session_store:
         session_store[session_id] = ChatMessageHistory()
     return session_store[session_id]
 
 
-
-
 # Crea el ChatPromptTemplate con historial
 contextual_answer_prompt = ChatPromptTemplate.from_messages(
     [
         ("system", answer_template),
-        MessagesPlaceholder("chat_history"),  # Agregamos historial de chat como placeholder
+        # Agregamos historial de chat como placeholder
+        MessagesPlaceholder("chat_history"),
         ("human", "{question}"),
     ]
 )
@@ -131,20 +142,19 @@ contextualize_q_prompt = ChatPromptTemplate.from_messages(
 )
 
 
-import numpy as np
-
 def cosine_similarity(vec_a, vec_b):
     """Calculate cosine similarity between two vectors."""
     a = np.array(vec_a)
     b = np.array(vec_b)
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
+
 class SearchService:
-    
-    chat_history: List[Dict[str, str]] = [] 
-    
+
+    chat_history: List[Dict[str, str]] = []
+
     # print(chat_history)
-    
+
     @staticmethod
     async def generate_standalone_question(question: str) -> str:
         """Generate a standalone question from a user query"""
@@ -175,11 +185,11 @@ class SearchService:
 
         # Extraer todos los productos recomendados
         recommended_products = []
-        seen_product_slugs = set() 
+        seen_product_slugs = set()
         for match in results['matches']:
             product_slug = match['id'].split("_")[0]
             product_lang = match['id'].split("_")[1]
-                    # Verificamos si el producto ya ha sido procesado
+            # Verificamos si el producto ya ha sido procesado
             if product_slug in seen_product_slugs:
                 continue  # Saltar si ya hemos visto este producto
 
@@ -189,11 +199,12 @@ class SearchService:
 
             # Acceder a la traducción del producto basada en el idioma
             product_translations = product_details.translations
-            selected_translation = product_translations.get(product_lang) or product_translations.get('en', {})
+            selected_translation = product_translations.get(
+                product_lang) or product_translations.get('en', {})
 
             product_name = selected_translation.name if selected_translation else "Nombre no disponible"
             product_description = selected_translation.description if selected_translation else "Descripción no disponible"
-            
+
             product_embedding = embedder.embed_query(product_description)
 
             recommended_products.append({
@@ -202,7 +213,7 @@ class SearchService:
                 "name": product_name,
                 "description": product_description,
                 "image_url": product_details.images,
-                "embedding": product_embedding 
+                "embedding": product_embedding
             })
             # Salimos del bucle si ya tenemos 5 productos únicos
             if len(recommended_products) >= 5:
@@ -212,13 +223,16 @@ class SearchService:
             # Calcular la similitud entre la pregunta y las descripciones de los productos
             query_embedding = embedder.embed_query(user_query)
             for product in recommended_products:
-                product["similarity"] = cosine_similarity(query_embedding, product["embedding"])
+                product["similarity"] = cosine_similarity(
+                    query_embedding, product["embedding"])
 
             # Ordenar productos por similitud y seleccionar principal y secundarios
-            recommended_products.sort(key=lambda x: x["similarity"], reverse=True)
+            recommended_products.sort(
+                key=lambda x: x["similarity"], reverse=True)
             principal_product = recommended_products[0]
-            secondary_products = recommended_products[1:5]  # Tomar los siguientes 4 como secundarios
-   
+            # Tomar los siguientes 4 como secundarios
+            secondary_products = recommended_products[1:5]
+
             return principal_product, secondary_products
 
         return None, []  # Retornar None si no hay productos recomendados
@@ -226,11 +240,10 @@ class SearchService:
     @staticmethod
     async def generate_answer(principal_product: Dict[str, Any], secondary_products: List[Dict[str, Any]], question: str, session_id: str = None) -> str:
         """Generate a final answer to the user's question based on the list of recommended products."""
-    
+
         # Obtener o crear el session_id
         session_id = get_or_create_session_id(session_id)
         chat_history_instance = get_session_history(session_id)
-        
 
         # Preparar la lista de productos en formato de texto para el prompt
         formatted_products_principal = "\n".join(
@@ -239,12 +252,12 @@ class SearchService:
         formatted_products_secundario = "\n".join(
             [f"- {product['name']}: {product['description']}" for product in [principal_product]]
         )
-        
+
         try:
             # Step 1: Crear un retriever basado en el historial de chat para contexto adicional
             history_aware_retriever = create_history_aware_retriever(
                 llm=llm,
-                retriever=pinecone_vector_store.as_retriever(), 
+                retriever=pinecone_vector_store.as_retriever(),
                 prompt=contextualize_q_prompt
             )
 
@@ -270,6 +283,7 @@ class SearchService:
             )
 
             # Ejecutar el flujo con la entrada más reciente
+
             response = conversational_chain.invoke(
                 {
                     "chat_history": chat_history_instance.messages,
@@ -285,7 +299,8 @@ class SearchService:
             response_text = response.get("answer", "")
 
             if response_text:
-                add_message_to_history(chat_history_instance, "ai", response_text)
+                add_message_to_history(
+                    chat_history_instance, "ai", response_text)
 
         except Exception as e:
             logging.error(f"Error generating answer: {e}")
