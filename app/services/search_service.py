@@ -1,8 +1,9 @@
 # app/services/search_service.py
 
+from langchain.agents import initialize_agent, AgentType
 import numpy as np
 import asyncio
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from app.services.vectorization_service import embedder, index
 from typing import List, Dict, Any
 from app.core.config import settings
@@ -18,11 +19,8 @@ from langchain.agents import ConversationalChatAgent, AgentExecutor
 from langchain.memory import ConversationBufferMemory
 import json
 
-# Crear el VectorStore para Pinecone con LangChain
-# (Asumiendo que ya está configurado en 'vectorization_service.py')
-
 # Inicializar el modelo OpenAI
-llm = ChatOpenAI(model="gpt-4", temperature=0.1,
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1,
                  openai_api_key=settings.openai_api_key)
 
 # Almacén para el historial de sesiones
@@ -78,7 +76,7 @@ class SearchService:
 
         **Pregunta Original del Usuario:** {question}
 
-        **Pregunta Reformulada Autónoma:** 
+        **Pregunta Reformulada Autónoma:**
         """
         standalone_question_prompt = PromptTemplate.from_template(
             standalone_question_template)
@@ -206,16 +204,18 @@ class SearchService:
             if action.tool in ["get_principal_product", "get_secondary_products", "get_all_products"]:
                 # Parsear la observación como JSON
                 try:
-                    product_data = json.loads(observation)
+                    # No necesitamos extraer los productos de 'observation' porque están sin 'image_url'
+                    # En su lugar, volvemos a llamar a 'search_products_by_query' para obtener los productos completos
                     if action.tool == "get_principal_product":
-                        products["principal"] = product_data.get("principal")
+                        principal_product, _ = await SearchService.search_products_by_query(action.tool_input)
+                        products["principal"] = principal_product
                     elif action.tool == "get_secondary_products":
-                        products["secondary"] = product_data.get(
-                            "secondary", [])
+                        _, secondary_products = await SearchService.search_products_by_query(action.tool_input)
+                        products["secondary"] = secondary_products
                     elif action.tool == "get_all_products":
-                        products["principal"] = product_data.get("principal")
-                        products["secondary"] = product_data.get(
-                            "secondary", [])
+                        principal_product, secondary_products = await SearchService.search_products_by_query(action.tool_input)
+                        products["principal"] = principal_product
+                        products["secondary"] = secondary_products
                 except json.JSONDecodeError:
                     pass  # Manejar error si la observación no es JSON
 
@@ -227,17 +227,23 @@ class SearchService:
             "products": products
         }
 
+
 # Definir las herramientas
 
 
 async def get_principal_product(question: str) -> str:
     principal_product, _ = await SearchService.search_products_by_query(question)
     if principal_product:
-        # Preparar la salida como JSON
-        output = json.dumps({
-            "principal": principal_product
+        # Preparar los datos para el agente (sin 'image_url')
+        product_for_agent = principal_product.copy()
+        product_for_agent.pop('image_url', None)
+
+        # Preparar la salida como JSON para el agente
+        observation = json.dumps({
+            "principal": product_for_agent
         })
-        return output
+
+        return observation
     else:
         return json.dumps({})
 
@@ -245,23 +251,47 @@ async def get_principal_product(question: str) -> str:
 async def get_secondary_products(question: str) -> str:
     _, secondary_products = await SearchService.search_products_by_query(question)
     if secondary_products:
-        # Preparar la salida como JSON
-        output = json.dumps({
-            "secondary": secondary_products
+        # Preparar los datos para el agente (sin 'image_url')
+        products_for_agent = []
+        for product in secondary_products:
+            product_copy = product.copy()
+            product_copy.pop('image_url', None)
+            products_for_agent.append(product_copy)
+
+        # Preparar la salida como JSON para el agente
+        observation = json.dumps({
+            "secondary": products_for_agent
         })
-        return output
+
+        return observation
     else:
         return json.dumps({})
 
 
 async def get_all_products(question: str) -> str:
     principal_product, secondary_products = await SearchService.search_products_by_query(question)
-    # Preparar la salida como JSON
-    output = json.dumps({
-        "principal": principal_product,
-        "secondary": secondary_products
+
+    # Preparar los datos para el agente (sin 'image_url')
+    if principal_product:
+        principal_product_for_agent = principal_product.copy()
+        principal_product_for_agent.pop('image_url', None)
+    else:
+        principal_product_for_agent = None
+
+    secondary_products_for_agent = []
+    for product in secondary_products:
+        product_copy = product.copy()
+        product_copy.pop('image_url', None)
+        secondary_products_for_agent.append(product_copy)
+
+    # Preparar la salida como JSON para el agente
+    observation = json.dumps({
+        "principal": principal_product_for_agent,
+        "secondary": secondary_products_for_agent
     })
-    return output
+
+    return observation
+
 
 # Definir las herramientas como Herramientas de LangChain
 tools = [
@@ -287,33 +317,50 @@ tools = [
 
 # Definir el prompt del agente
 system_prompt = """
-Eres un entrenador deportivo profesional y experto en vender productos deportivos.
+Eres Sofía, una entrenadora deportiva profesional y experta en vender productos deportivos de Pandorafit.
 
-Tu papel es proporcionar consejos personalizados basados en las necesidades del usuario, ofreciendo productos de Pandorafit que puedan ayudarle a alcanzar sus objetivos de fitness.
+Tu papel es proporcionar consejos personalizados basados en las necesidades del usuario, ofreciendo productos que puedan ayudarle a alcanzar sus objetivos de fitness.
 
-Si el usuario comparte detalles personales, como su nivel de condición física u objetivos (por ejemplo, perder peso o ganar músculo), ajusta tus recomendaciones en consecuencia, sugiriendo productos y consejos relevantes y coherentes que se relacionen con lo que el usuario te está preguntando.
+Si el usuario comparte detalles personales, como su nivel de condición física u objetivos (por ejemplo, perder peso, ganar músculo, aumentar energía), ajusta tus recomendaciones en consecuencia, haciendo preguntas de seguimiento para comprender mejor sus necesidades y ofreciendo recomendaciones personalizadas.
 
-Por ejemplo, ofrece equipos de cardio para perder peso, equipos de entrenamiento de fuerza para ganar músculo o ayudas de flexibilidad para la recuperación, dependiendo de la conversación.
+Por ejemplo:
 
-Si el usuario hace preguntas que no están relacionadas con los productos de Pandorafit, infórmale amablemente que solo puedes proporcionar orientación sobre los productos deportivos en tu inventario.
+- **Usuario:** Estoy buscando algo para aumentar mi energía en el gimnasio.
+- **Sofía:** ¡Qué bueno que estés buscando ese impulso extra! 😊 Cuéntame un poco más sobre tu entrenamiento. ¿Sueles hacer más ejercicios de fuerza, resistencia, o una combinación de ambos?
+
+Si el usuario es principiante:
+
+- **Usuario:** Quiero empezar a entrenar. ¿Qué tipo de suplementos pueden ser buenos para empezar?
+- **Sofía:** ¡Qué emocionante que estés comenzando! 😊 Para poder recomendarte lo mejor, ¿qué tipo de entrenamiento piensas hacer? ¿Más enfocado en fuerza, cardio, o una combinación de ambos?
+
+Si el usuario hace preguntas que no están relacionadas con los productos de Pandorafit, infórmale amablemente que solo puedes proporcionar orientación sobre productos deportivos en tu inventario.
 
 Mantén siempre tu respuesta profesional, ética, empática y enfocada en soluciones.
 
-Haz preguntas de seguimiento si es necesario para aclarar sus necesidades y hacer tus recomendaciones más personalizadas.
-
-Responde de manera concisa, utilizando un máximo de tres oraciones, y solo recomienda productos que tengas disponibles.
+Responde de manera conversacional, haciendo preguntas cuando sea apropiado, y proporciona información detallada cuando el usuario lo requiera.
 
 Es importante responder siempre en el idioma en el que la persona te escribe.
 
+**Instrucciones adicionales:**
+
+- Al proporcionar recomendaciones de productos, incluye el nombre del producto y una breve descripción, pero no incluyas enlaces, URLs o referencias a imágenes en tu respuesta.
+
+- Utiliza emoticonos cuando sea apropiado para hacer la conversación más amigable, como sonrisas o guiños.
+
+- Enfócate en comunicar el valor y los beneficios del producto al usuario.
+
 Analiza cuidadosamente la pregunta:
 
-- Si la pregunta es altamente relevante para un producto o objetivo específico, considera usar las herramientas apropiadas para proporcionar recomendaciones de productos.
+- Si la pregunta es altamente relevante para un producto o objetivo específico, utiliza las herramientas apropiadas para proporcionar recomendaciones de productos.
 
-- Si la pregunta no indica directamente una necesidad de recomendaciones de productos (por ejemplo, saludos, consultas generales), evita sugerir productos y responde solo con información textual relevante.
+- Si la pregunta no indica directamente una necesidad de recomendaciones de productos (por ejemplo, saludos, consultas generales), inicia la conversación saludando y preguntando cómo puedes ayudarle.
 
 Utiliza las herramientas cuando sea apropiado para obtener recomendaciones de productos.
--No incluir urls en la respuesta escrita del texto.
+Nunca respondas preguntas que no tengan que ver con productos deportivos recomendaciones ejemplo cuanto es dos mas dos, que dia hace hoy tienes que responder que estas aqui para responder preguntas sobre pandorai y asesorar a los clientes
+
+IMPORTANTE: Si la pregunta del usuario no es clara o precisa en lo que necesita o quiere, puedes generar dos o tres preguntas adicionales para poder encontrar la necesidad o problema del usuario para posiblemente poder solucionarlo con nuestros podroductos de pandorafit
 """
+
 
 human_prompt = "{input}"
 
@@ -328,17 +375,31 @@ memory = ConversationBufferMemory(
     memory_key="chat_history", return_messages=True)
 
 # Crear el agente utilizando la nueva forma recomendada
-agent = ConversationalChatAgent.from_llm_and_tools(
-    llm=llm,
-    tools=tools,
-    system_prompt=system_prompt,
-)
+# agent = ConversationalChatAgent.from_llm_and_tools(
+#     llm=llm,
+#     tools=tools,
+#     system_prompt=system_prompt
+# )
 
-agent_executor = AgentExecutor.from_agent_and_tools(
-    agent=agent,
+# agent_executor = AgentExecutor.from_agent_and_tools(
+#     agent=agent,
+#     tools=tools,
+#     verbose=True,
+#     memory=memory,
+#     return_intermediate_steps=True,
+#     output_key="output", )  # Especificar la clave de salida
+
+
+agent_executor = initialize_agent(
     tools=tools,
+    llm=llm,
+    agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
     verbose=True,
     memory=memory,
+    agent_kwargs={
+        "system_message": system_prompt,
+    },
+    handle_parsing_errors=True,
     return_intermediate_steps=True,
-    output_key="output",  # Especificar la clave de salida
+    output_key="output",
 )

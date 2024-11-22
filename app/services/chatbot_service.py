@@ -1,8 +1,9 @@
 # /app/services/chatbot_service.py
 from app.services.search_service import SearchService
 
+
 class ChatbotService:
-    
+
     @staticmethod
     async def process_user_query(query_text: str):
         """
