@@ -11,7 +11,6 @@ origins = [
     "http://localhost:3000",
     "http://localhost:3001",# La URL de tu frontend
     "https://pandorai.ch/"
-    
 ]
 
 app.add_middleware(
@@ -30,6 +29,8 @@ app.include_router(orders.router, prefix="/api/v1/orders", tags=["Orders"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
 app.include_router(categories.router, prefix="/api/v1/categories", tags=["Categories"])
 app.include_router(chatbot.router, prefix="/chatbot", tags=["Chatbot"])
+
+
 
 @app.get("/")
 async def ping():
