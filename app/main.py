@@ -14,6 +14,7 @@ origins = [
     "https://ecomerce-demo-j6ouz1im8-juansesu3s-projects.vercel.app/",
 ]
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
