@@ -5,40 +5,47 @@ from app.api.v1.routes import products, users, orders, admin, categories, chatbo
 from app.core import auth
 from fastapi.middleware.cors import CORSMiddleware
 
+
 app = FastAPI()
 
 origins = [
     "http://localhost:3000",
-    "http://localhost:3001",# La URL de tu frontend
+    "http://localhost:3001",  # La URL de tu frontend
     "http://192.168.1.47:3000"
-    
+
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Permite todos los métodos (GET, POST, PUT, DELETE, etc.)
+    # Permite todos los métodos (GET, POST, PUT, DELETE, etc.)
+    allow_methods=["*"],
     allow_headers=["*"],  # Permite todos los encabezados
 )
 
 # Incluir las rutas de los endpoints
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
-app.include_router(products.router, prefix="/api/v1/products", tags=["Products"])
+app.include_router(
+    products.router, prefix="/api/v1/products", tags=["Products"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
 app.include_router(orders.router, prefix="/api/v1/orders", tags=["Orders"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
-app.include_router(categories.router, prefix="/api/v1/categories", tags=["Categories"])
+app.include_router(categories.router,
+                   prefix="/api/v1/categories", tags=["Categories"])
 app.include_router(chatbot.router, prefix="/chatbot", tags=["Chatbot"])
+
 
 @app.get("/")
 async def ping():
     return {"message": "Pong"}
 # get testing server
 
+
 @app.on_event("startup")
 async def startup_db_client():
     await connect_to_mongo()
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
