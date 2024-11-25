@@ -19,6 +19,10 @@ import json
 import os
 from bs4 import BeautifulSoup
 
+
+
+
+
 # Inicializar el modelo OpenAI
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1,
                  openai_api_key=settings.openai_api_key)
