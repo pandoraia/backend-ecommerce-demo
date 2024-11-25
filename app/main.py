@@ -15,10 +15,6 @@ origins = [
     "https://ecomerce-demo-pandorai.vercel.app",
 ]
 
-
-
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -35,8 +31,7 @@ app.include_router(
 app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
 app.include_router(orders.router, prefix="/api/v1/orders", tags=["Orders"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
-app.include_router(categories.router,
-                   prefix="/api/v1/categories", tags=["Categories"])
+app.include_router(categories.router, prefix="/api/v1/categories", tags=["Categories"])
 app.include_router(chatbot.router, prefix="/chatbot", tags=["Chatbot"])
 
 
