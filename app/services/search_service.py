@@ -1,5 +1,3 @@
-# app/services/search_service.py
-
 from langchain.agents import initialize_agent, AgentType
 import numpy as np
 import asyncio
@@ -18,10 +16,18 @@ from langchain.prompts import SystemMessagePromptTemplate, HumanMessagePromptTem
 from langchain.agents import ConversationalChatAgent, AgentExecutor
 from langchain.memory import ConversationBufferMemory
 import json
+import os
+from bs4 import BeautifulSoup
 
 # Inicializar el modelo OpenAI
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1,
                  openai_api_key=settings.openai_api_key)
+
+if settings.langchain_tracing_v2:
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_ENDPOINT"] = settings.langchain_endpoint
+    os.environ["LANGCHAIN_API_KEY"] = settings.langchain_api_key
+    os.environ["LANGCHAIN_PROJECT"] = settings.langchain_project
 
 # Almacén para el historial de sesiones
 session_store = {}
@@ -169,6 +175,10 @@ class SearchService:
     async def generate_answer(question: str, session_id: str = None) -> Dict[str, Any]:
         """Generar una respuesta final a la pregunta del usuario utilizando un agente con herramientas."""
 
+        def validate_html(html_content: str) -> str:
+            soup = BeautifulSoup(html_content, "html.parser")
+            return str(soup)
+
         # Obtener o crear session_id
         session_id = get_or_create_session_id(session_id)
         chat_history_instance = get_session_history(session_id)
@@ -202,22 +212,21 @@ class SearchService:
         # Extraer productos de las salidas de las herramientas
         for action, observation in intermediate_steps:
             if action.tool in ["get_principal_product", "get_secondary_products", "get_all_products"]:
-                # Parsear la observación como JSON
-                try:
-                    # No necesitamos extraer los productos de 'observation' porque están sin 'image_url'
-                    # En su lugar, volvemos a llamar a 'search_products_by_query' para obtener los productos completos
-                    if action.tool == "get_principal_product":
-                        principal_product, _ = await SearchService.search_products_by_query(action.tool_input)
-                        products["principal"] = principal_product
-                    elif action.tool == "get_secondary_products":
-                        _, secondary_products = await SearchService.search_products_by_query(action.tool_input)
-                        products["secondary"] = secondary_products
-                    elif action.tool == "get_all_products":
-                        principal_product, secondary_products = await SearchService.search_products_by_query(action.tool_input)
-                        products["principal"] = principal_product
-                        products["secondary"] = secondary_products
-                except json.JSONDecodeError:
-                    pass  # Manejar error si la observación no es JSON
+                # No necesitamos extraer los productos de 'observation' porque están sin 'image_url'
+                # En su lugar, volvemos a llamar a 'search_products_by_query' para obtener los productos completos
+                if action.tool == "get_principal_product":
+                    principal_product, _ = await SearchService.search_products_by_query(action.tool_input)
+                    products["principal"] = principal_product
+                elif action.tool == "get_secondary_products":
+                    _, secondary_products = await SearchService.search_products_by_query(action.tool_input)
+                    products["secondary"] = secondary_products
+                elif action.tool == "get_all_products":
+                    principal_product, secondary_products = await SearchService.search_products_by_query(action.tool_input)
+                    products["principal"] = principal_product
+                    products["secondary"] = secondary_products
+            elif action.tool == "generate_follow_up_question":
+                # Agregar la pregunta de seguimiento al response_text
+                response_text = observation
 
         if response_text:
             add_message_to_history(chat_history_instance, "ai", response_text)
@@ -293,6 +302,31 @@ async def get_all_products(question: str) -> str:
     return observation
 
 
+# Nueva función para generar una única pregunta de seguimiento
+async def generate_follow_up_question(question: str) -> str:
+    """Generar una pregunta de seguimiento para comprender mejor las necesidades del usuario."""
+    follow_up_question_template = """
+    Tu tarea es generar **una sola pregunta de seguimiento** que pueda ayudar a comprender mejor las necesidades o problemas del usuario, basándote en su pregunta original.
+
+    **Pregunta Original del Usuario:** {question}
+
+    **Pregunta de Seguimiento:**
+    """
+
+    follow_up_question_prompt = PromptTemplate.from_template(
+        follow_up_question_template)
+    prompt_input = {"question": question}
+
+    try:
+        chain = follow_up_question_prompt | llm
+        result = await chain.ainvoke(prompt_input)
+        follow_up_question = result.content.strip()
+    except Exception as e:
+        logging.error(f"Error al generar la pregunta de seguimiento: {e}")
+        raise
+    return follow_up_question
+
+
 # Definir las herramientas como Herramientas de LangChain
 tools = [
     Tool(
@@ -312,6 +346,13 @@ tools = [
         func=get_all_products,
         coroutine=get_all_products,
         description="Usa esta herramienta para obtener tanto las recomendaciones de productos principales como secundarios basándote en la pregunta del usuario."
+    ),
+    Tool(
+        name="generate_follow_up_question",
+        func=generate_follow_up_question,
+        coroutine=generate_follow_up_question,
+        description="Usa esta herramienta para generar una **única** pregunta de seguimiento al usuario cuando su pregunta no es clara o necesita más contexto para poder ofrecer una mejor recomendación.",
+        return_direct=True  # Agregamos return_direct=True
     )
 ]
 
@@ -355,10 +396,16 @@ Analiza cuidadosamente la pregunta:
 
 - Si la pregunta no indica directamente una necesidad de recomendaciones de productos (por ejemplo, saludos, consultas generales), inicia la conversación saludando y preguntando cómo puedes ayudarle.
 
-Utiliza las herramientas cuando sea apropiado para obtener recomendaciones de productos.
-Nunca respondas preguntas que no tengan que ver con productos deportivos recomendaciones ejemplo cuanto es dos mas dos, que dia hace hoy tienes que responder que estas aqui para responder preguntas sobre pandorai y asesorar a los clientes
+- Si la pregunta del usuario **no es clara o precisa** en lo que necesita o quiere, utiliza la herramienta 'generate_follow_up_question' **una sola vez** para generar **una pregunta de seguimiento** que te ayude a entender mejor sus necesidades. **Después de obtener la pregunta de seguimiento, preséntala al usuario y espera su respuesta. No vuelvas a llamar a la herramienta hasta que el usuario haya respondido.**
 
-IMPORTANTE: Si la pregunta del usuario no es clara o precisa en lo que necesita o quiere, puedes generar dos o tres preguntas adicionales para poder encontrar la necesidad o problema del usuario para posiblemente poder solucionarlo con nuestros podroductos de pandorafit
+- **No entres en un bucle de generar preguntas de seguimiento sin interactuar con el usuario.**
+
+Utiliza las herramientas cuando sea apropiado para obtener recomendaciones de productos o para generar preguntas de seguimiento.
+
+Nunca respondas preguntas que no tengan que ver con productos deportivos o recomendaciones; por ejemplo, si te preguntan cuánto es dos más dos o qué día es hoy, debes responder que estás aquí para responder preguntas sobre Pandorafit y asesorar a los clientes.
+-Todas tus respuestas deben estar en formato HTML. Utiliza etiquetas HTML apropiadas para estructurar y estilizar el contenido, como `<p>`, `<strong>`, `<ul>`, `<li>`, etc. Asegúrate de que la respuesta sea válida y bien formada para que el frontend pueda aplicar estilos personalizados fácilmente.
+
+IMPORTANTE: Si la pregunta del usuario no es clara o precisa en lo que necesita o quiere, puedes generar dos o tres preguntas adicionales para poder encontrar la necesidad o problema del usuario para posiblemente poder solucionarlo con nuestros productos de Pandorafit.
 """
 
 
@@ -375,21 +422,6 @@ memory = ConversationBufferMemory(
     memory_key="chat_history", return_messages=True)
 
 # Crear el agente utilizando la nueva forma recomendada
-# agent = ConversationalChatAgent.from_llm_and_tools(
-#     llm=llm,
-#     tools=tools,
-#     system_prompt=system_prompt
-# )
-
-# agent_executor = AgentExecutor.from_agent_and_tools(
-#     agent=agent,
-#     tools=tools,
-#     verbose=True,
-#     memory=memory,
-#     return_intermediate_steps=True,
-#     output_key="output", )  # Especificar la clave de salida
-
-
 agent_executor = initialize_agent(
     tools=tools,
     llm=llm,
@@ -402,4 +434,7 @@ agent_executor = initialize_agent(
     handle_parsing_errors=True,
     return_intermediate_steps=True,
     output_key="output",
+    max_iterations=3,  # Limita el número máximo de iteraciones
+    # Indica al agente que genere una respuesta al detenerse
+    early_stopping_method="generate"
 )
