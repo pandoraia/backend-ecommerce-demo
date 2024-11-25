@@ -11,7 +11,7 @@ origins = [
     "http://localhost:3000",
     "http://localhost:3001",# La URL de tu frontend
     "https://pandorai.ch/",
-    "https://ecomerce-demo-j6ouz1im8-juansesu3s-projects.vercel.app/",
+    "https://ecomerce-demo-pandorai.vercel.app/",
 ]
 
 
