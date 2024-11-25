@@ -10,8 +10,8 @@ app = FastAPI()
 origins = [
     "http://localhost:3000",
     "http://localhost:3001",# La URL de tu frontend
-    "https://pandorai.ch/",
-    "https://ecomerce-demo-pandorai.vercel.app/",
+    "https://pandorai.ch",
+    "https://ecomerce-demo-pandorai.vercel.app",
 ]
 
 
