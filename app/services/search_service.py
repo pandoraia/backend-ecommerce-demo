@@ -5,10 +5,8 @@ from langchain_pinecone import PineconeVectorStore
 from langchain_openai import OpenAIEmbeddings
 from app.services.vectorization_service import embedder, index
 from typing import List, Dict, Any
-from langchain_openai import ChatOpenAI
 from app.core.config import settings
 from langchain.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
-from langchain.chains import LLMChain
 import logging
 from app.services.product_service import get_product_by_slug
 from langchain_community.chat_message_histories import ChatMessageHistory
@@ -28,7 +26,6 @@ history_aware_retriever = pinecone_vector_store.as_retriever()
 
 # Inicializa el modelo OpenAI
 llm = ChatOpenAI(openai_api_key=settings.openai_api_key)
-
 
 # Create standalone question prompt templates
 standalone_question_template = """
@@ -88,13 +85,7 @@ def add_message_to_history(chat_history_instance, message_type, message_content)
 
 def get_or_create_session_id(session_id: str = None) -> str:
     """
-    Obtiene un session_id existente o crea uno nuevo si no se proporciona.
-
-    Args:
-        session_id (str): El identificador de la sesión, si se proporciona.
-
-    Returns:
-        str: El identificador de la sesión.
+    Obtener un session_id existente o crear uno nuevo si no se proporciona.
     """
     if session_id is None or session_id not in session_store:
         session_id = session_id or "default_session"
@@ -137,7 +128,7 @@ contextualize_q_prompt = ChatPromptTemplate.from_messages(
 
 
 def cosine_similarity(vec_a, vec_b):
-    """Calculate cosine similarity between two vectors."""
+    """Calcular la similitud coseno entre dos vectores."""
     a = np.array(vec_a)
     b = np.array(vec_b)
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
@@ -151,19 +142,36 @@ class SearchService:
 
     @staticmethod
     async def generate_standalone_question(question: str) -> str:
-        """Generate a standalone question from a user query"""
+        """Generar una pregunta autónoma a partir de una consulta del usuario."""
+        standalone_question_template = """
+        Tu tarea es reformular la pregunta del usuario dada en una pregunta autónoma que suene natural, como si el usuario la estuviera preguntando directamente.
+
+        Asegúrate de que la pregunta autónoma tenga sentido por sí misma, sin requerir ningún contexto previo. Preserva la intención original del usuario, detalles y matices, pero hazla clara y autosuficiente, como si fuera la primera vez que se formula la pregunta.
+
+        Si la pregunta original ya es autoexplicativa, refínala ligeramente para que suene más natural y conversacional.
+
+        **Pregunta Original del Usuario:** {question}
+
+        **Pregunta Reformulada Autónoma:**
+        """
+        standalone_question_prompt = PromptTemplate.from_template(
+            standalone_question_template)
         prompt_input = {"question": question}
         try:
-            chain = LLMChain(llm=llm, prompt=standalone_question_prompt)
-            standalone_question = await chain.apredict(**prompt_input)
+            # Usando RunnableSequence en lugar de LLMChain
+            chain = standalone_question_prompt | llm
+            # Ejecutar la cadena y obtener el resultado
+            result = await chain.ainvoke(prompt_input)
+            # Obtener el contenido del mensaje
+            standalone_question = result.content
         except Exception as e:
-            logging.error(f"Error generating standalone question: {e}")
+            logging.error(f"Error al generar la pregunta autónoma: {e}")
             raise
-        return standalone_question
+        return standalone_question.strip()
 
     @staticmethod
     async def search_products_by_query(user_query: str, session_id: str = None) -> List[Dict[str, Any]]:
-        """Search for products using a standalone question and Pinecone."""
+        """Buscar productos utilizando una pregunta autónoma y Pinecone."""
         # Obtener o crear el session_id
         session_id = get_or_create_session_id(session_id)
         chat_history_instance = get_session_history(session_id)
@@ -171,7 +179,7 @@ class SearchService:
 
         # Generar una pregunta autónoma
         standalone_question = await SearchService.generate_standalone_question(user_query)
-        print(f"Here is the standalone question: >>> {standalone_question}")
+        print(f"Aquí está la pregunta autónoma: >>> {standalone_question}")
 
         # Generar embedding para la pregunta autónoma
         embedding = embedder.embed_query(standalone_question)
@@ -185,9 +193,8 @@ class SearchService:
             product_lang = match['id'].split("_")[1]
             # Verificamos si el producto ya ha sido procesado
             if product_slug in seen_product_slugs:
-                continue  # Saltar si ya hemos visto este producto
+                continue
 
-            # Añadimos el producto al conjunto para evitar futuros duplicados
             seen_product_slugs.add(product_slug)
             product_details = await get_product_by_slug(product_slug)
 
@@ -209,7 +216,7 @@ class SearchService:
                 "image_url": product_details.images,
                 "embedding": product_embedding
             })
-            # Salimos del bucle si ya tenemos 5 productos únicos
+            # Salir del bucle si tenemos 5 productos únicos
             if len(recommended_products) >= 5:
                 break
 
@@ -240,16 +247,6 @@ class SearchService:
         chat_history_instance = get_session_history(session_id)
 
         # Preparar la lista de productos en formato de texto para el prompt
-        formatted_products_list = "\n".join(
-            [f"- {product['name']}: {product['description']}" for product in products_list])
-
-        combined_prompt_input = {
-            "products_list": formatted_products_list,
-            "question": question,
-            "chat_history": chat_history_instance.messages,
-            "context": "Información relevante del contexto, si la tienes."
-        }
-
         formatted_products_principal = "\n".join(
             [f"- {product['name']}: {product['description']}" for product in [principal_product]]
         )
@@ -284,7 +281,6 @@ class SearchService:
                 input_messages_key="input",
                 history_messages_key="chat_history",
                 output_messages_key="answer"
-
             )
 
             # Ejecutar el flujo con la entrada más reciente
@@ -309,3 +305,5 @@ class SearchService:
         except Exception as e:
             logging.error(f"Error generating answer: {e}")
             raise
+
+        return response

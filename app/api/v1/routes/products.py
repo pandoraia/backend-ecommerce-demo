@@ -14,6 +14,8 @@ async def list_products():
     return products
 
 
+
+
 @router.get("/{slug}", response_model=ProductOut)
 async def get_product(slug: str):
     product = await get_product_by_slug(slug)
