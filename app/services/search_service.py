@@ -303,10 +303,27 @@ async def get_all_products(question: str) -> str:
 
 
 # Nueva función para generar una única pregunta de seguimiento
-async def generate_follow_up_question(question: str) -> str:
-    """Generar una pregunta de seguimiento para comprender mejor las necesidades del usuario."""
+async def generate_follow_up_question(question: str, session_id: str = None) -> str:
+    """Solo si es necesario generar una pregunta de seguimiento que sea logica y coherente con el hsitorial"""
+
+    # Obtener o crear session_id
+    session_id = get_or_create_session_id(session_id)
+    chat_history_instance = get_session_history(session_id)
+
+    # Obtener los últimos 10 mensajes del chat_history
+    last_10_messages = chat_history_instance.messages[-10:]
+
+    # Formatear los mensajes para incluirlos en el prompt
+    formatted_messages = "\n".join(
+        [f"{msg.type}: {msg.content}" for msg in last_10_messages])
+
     follow_up_question_template = """
-    Tu tarea es generar **una sola pregunta de seguimiento** que pueda ayudar a comprender mejor las necesidades o problemas del usuario, basándote en su pregunta original.
+    pon atencion al historial de conversacion y a la ultima pregunta original del usuario  si es necesario genera una pregunta que sea logica y coherente que ayude al usuario a poder econtrar mas rapido un producto si no es necesario generar una pregunta no lo hagas
+    LA idea principal es simepre ayudar al cliente  recomendando un producto.
+
+
+    **Historial de la Conversación:**
+    {formatted_messages}
 
     **Pregunta Original del Usuario:** {question}
 
@@ -315,7 +332,8 @@ async def generate_follow_up_question(question: str) -> str:
 
     follow_up_question_prompt = PromptTemplate.from_template(
         follow_up_question_template)
-    prompt_input = {"question": question}
+    prompt_input = {
+        "formatted_messages": formatted_messages, "question": question}
 
     try:
         chain = follow_up_question_prompt | llm
@@ -360,27 +378,18 @@ tools = [
 system_prompt = """
 Eres Sofía, una entrenadora deportiva profesional y experta en vender productos deportivos de Pandorafit.
 
-Tu papel es proporcionar consejos personalizados basados en las necesidades del usuario, ofreciendo productos que puedan ayudarle a alcanzar sus objetivos de fitness.
+Tu papel es generar ventas ofreciendo productos que puedan ayudarle a alcanzar los objetivos de fitness de los usuarios.
 
-Si el usuario comparte detalles personales, como su nivel de condición física u objetivos (por ejemplo, perder peso, ganar músculo, aumentar energía), ajusta tus recomendaciones en consecuencia, haciendo preguntas de seguimiento para comprender mejor sus necesidades y ofreciendo recomendaciones personalizadas.
+Si el usuario comparte detalles personales, como su nivel de condición física u objetivos (por ejemplo, perder peso, ganar músculo, aumentar energía), ajusta tus recomendaciones en consecuencia, ofreciendo recomendaciones personalizadas.
 
-Por ejemplo:
-
-- **Usuario:** Estoy buscando algo para aumentar mi energía en el gimnasio.
-- **Sofía:** ¡Qué bueno que estés buscando ese impulso extra! 😊 Cuéntame un poco más sobre tu entrenamiento. ¿Sueles hacer más ejercicios de fuerza, resistencia, o una combinación de ambos?
-
-Si el usuario es principiante:
-
-- **Usuario:** Quiero empezar a entrenar. ¿Qué tipo de suplementos pueden ser buenos para empezar?
-- **Sofía:** ¡Qué emocionante que estés comenzando! 😊 Para poder recomendarte lo mejor, ¿qué tipo de entrenamiento piensas hacer? ¿Más enfocado en fuerza, cardio, o una combinación de ambos?
 
 Si el usuario hace preguntas que no están relacionadas con los productos de Pandorafit, infórmale amablemente que solo puedes proporcionar orientación sobre productos deportivos en tu inventario.
 
 Mantén siempre tu respuesta profesional, ética, empática y enfocada en soluciones.
 
-Responde de manera conversacional, haciendo preguntas cuando sea apropiado, y proporciona información detallada cuando el usuario lo requiera.
+Responde de manera conversacional, haciendo preguntas solo cuando sea apropiado, y proporciona información detallada cuando el usuario lo requiera.
 
-Es importante responder siempre en el idioma en el que la persona te escribe.
+Es importante responder siempre en el idioma en el que se genera la pregunta si es ingles en ingles si la pregunta esta en español en español etc..
 
 **Instrucciones adicionales:**
 
@@ -405,7 +414,9 @@ Utiliza las herramientas cuando sea apropiado para obtener recomendaciones de pr
 Nunca respondas preguntas que no tengan que ver con productos deportivos o recomendaciones; por ejemplo, si te preguntan cuánto es dos más dos o qué día es hoy, debes responder que estás aquí para responder preguntas sobre Pandorafit y asesorar a los clientes.
 -Todas tus respuestas deben estar en formato HTML. Utiliza etiquetas HTML apropiadas para estructurar y estilizar el contenido, como `<p>`, `<strong>`, `<ul>`, `<li>`, etc. Asegúrate de que la respuesta sea válida y bien formada para que el frontend pueda aplicar estilos personalizados fácilmente.
 
-IMPORTANTE: Si la pregunta del usuario no es clara o precisa en lo que necesita o quiere, puedes generar dos o tres preguntas adicionales para poder encontrar la necesidad o problema del usuario para posiblemente poder solucionarlo con nuestros productos de Pandorafit.
+IMPORTANTE: Solo utiliza la herramienta  si en verdad es necesario generate_follow_up_question si no no lo hagas.
+-Si no encuentras el producto que el usuario desea di que no tienes el producto y disculpate.
+_Solo recomienda productos que tengas en el inventario y que en verdad sean coherentes con lo que el usuario te pide si no tienes el producto especifico que le usuario di que no tienes ese producto pero le puedes recomendar otro que tenga similitud o no  recomiendes nada.
 """
 
 
@@ -419,7 +430,7 @@ prompt = ChatPromptTemplate.from_messages([
 
 # Crear la memoria de conversación
 memory = ConversationBufferMemory(
-    memory_key="chat_history", return_messages=True)
+    memory_key="chat_history", return_messages=True, k=20)
 
 # Crear el agente utilizando la nueva forma recomendada
 agent_executor = initialize_agent(
