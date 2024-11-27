@@ -1,8 +1,7 @@
-# app/services/search-services.py
+from langchain.agents import initialize_agent, AgentType
 import numpy as np
-from langchain_openai import OpenAI
-from langchain_pinecone import PineconeVectorStore
-from langchain_openai import OpenAIEmbeddings
+import asyncio
+from langchain_openai import ChatOpenAI
 from app.services.vectorization_service import embedder, index
 from typing import List, Dict, Any
 from app.core.config import settings
@@ -20,7 +19,6 @@ import json
 import os
 from bs4 import BeautifulSoup
 
-
 # Inicializar el modelo OpenAI
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1,
                  openai_api_key=settings.openai_api_key)
@@ -36,9 +34,9 @@ session_store = {}
 
 
 def add_message_to_history(chat_history_instance, message_type, message_content):
-    """Agrega un mensaje al historial de chat, asegurándose de que no esté duplicado."""
+    """Agregar un mensaje al historial de chat, asegurando que no esté duplicado."""
     existing_messages = [
-        msg.content for msg in chat_history_instance.messages if msg.type == message_type]
+        msg.content for msg in chat_history_instance.messages if isinstance(msg, BaseMessage)]
     if message_content not in existing_messages:
         if message_type == "human":
             chat_history_instance.add_user_message(message_content)
@@ -63,33 +61,6 @@ def get_session_history(session_id: str) -> BaseChatMessageHistory:
     return session_store[session_id]
 
 
-# Crea el ChatPromptTemplate con historial
-contextual_answer_prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", answer_template),
-        # Agregamos historial de chat como placeholder
-        MessagesPlaceholder("chat_history"),
-        ("human", "{question}"),
-    ]
-)
-
-contextualize_q_system_prompt = (
-    "Given a chat history and the latest user question "
-    "which might reference context in the chat history, "
-    "formulate a standalone question which can be understood "
-    "without the chat history. Do NOT answer the question, "
-    "just reformulate it if needed and otherwise return it as is."
-)
-
-contextualize_q_prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", contextualize_q_system_prompt),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),
-    ]
-)
-
-
 def cosine_similarity(vec_a, vec_b):
     """Calcular la similitud coseno entre dos vectores."""
     a = np.array(vec_a)
@@ -98,10 +69,6 @@ def cosine_similarity(vec_a, vec_b):
 
 
 class SearchService:
-
-    chat_history: List[Dict[str, str]] = []
-
-    # print(chat_history)
 
     @staticmethod
     async def generate_standalone_question(question: str) -> str:
@@ -154,7 +121,7 @@ class SearchService:
         for match in results['matches']:
             product_slug = match['id'].split("_")[0]
             product_lang = match['id'].split("_")[1]
-            # Verificamos si el producto ya ha sido procesado
+            # Saltar si ya hemos procesado este producto
             if product_slug in seen_product_slugs:
                 continue
 
@@ -169,7 +136,8 @@ class SearchService:
             product_name = selected_translation.name if selected_translation else "Nombre no disponible"
             product_description = selected_translation.description if selected_translation else "Descripción no disponible"
 
-            product_embedding = embedder.embed_query(product_description)
+            # Eliminar 'embedding' para evitar problemas de serialización
+            # product_embedding = embedder.embed_query(product_description)
 
             recommended_products.append({
                 "slug": product_slug,
@@ -177,7 +145,7 @@ class SearchService:
                 "name": product_name,
                 "description": product_description,
                 "image_url": product_details.images,
-                "embedding": product_embedding
+                # "embedding": product_embedding
             })
             # Salir del bucle si tenemos 5 productos únicos
             if len(recommended_products) >= 5:
@@ -187,14 +155,16 @@ class SearchService:
             # Calcular la similitud entre la pregunta y las descripciones de los productos
             query_embedding = embedder.embed_query(user_query)
             for product in recommended_products:
+                product_embedding = embedder.embed_query(
+                    product['description'])
                 product["similarity"] = cosine_similarity(
-                    query_embedding, product["embedding"])
+                    query_embedding, product_embedding)
 
             # Ordenar productos por similitud y seleccionar principal y secundarios
             recommended_products.sort(
                 key=lambda x: x["similarity"], reverse=True)
             principal_product = recommended_products[0]
-            # Tomar los siguientes 4 como secundarios
+            # Tomar los siguientes 4 como productos secundarios
             secondary_products = recommended_products[1:5]
 
             return principal_product, secondary_products
@@ -202,71 +172,280 @@ class SearchService:
         return None, []  # Retornar None si no hay productos recomendados
 
     @staticmethod
-    async def generate_answer(principal_product: Dict[str, Any], secondary_products: List[Dict[str, Any]], question: str, session_id: str = None) -> str:
-        """Generate a final answer to the user's question based on the list of recommended products."""
+    async def generate_answer(question: str, session_id: str = None) -> Dict[str, Any]:
+        """Generar una respuesta final a la pregunta del usuario utilizando un agente con herramientas."""
 
-        # Obtener o crear el session_id
+        def validate_html(html_content: str) -> str:
+            soup = BeautifulSoup(html_content, "html.parser")
+            return str(soup)
+
+        # Obtener o crear session_id
         session_id = get_or_create_session_id(session_id)
         chat_history_instance = get_session_history(session_id)
 
-        # Preparar la lista de productos en formato de texto para el prompt
-        formatted_products_principal = "\n".join(
-            [f"- {product['name']}: {product['description']}" for product in [principal_product]]
-        )
-        formatted_products_secundario = "\n".join(
-            [f"- {product['name']}: {product['description']}" for product in [principal_product]]
-        )
+        # Agregar la pregunta al historial
+        add_message_to_history(chat_history_instance, "human", question)
 
-        try:
-            # Step 1: Crear un retriever basado en el historial de chat para contexto adicional
-            history_aware_retriever = create_history_aware_retriever(
-                llm=llm,
-                retriever=pinecone_vector_store.as_retriever(),
-                prompt=contextualize_q_prompt
-            )
+        # Ejecutar el agente de manera asíncrona
+        result = await agent_executor.ainvoke({"input": question})
 
-            # Step 2: Crear una cadena de documentos para combinar respuestas
-            document_chain = create_stuff_documents_chain(
-                llm=llm,
-                prompt=contextual_answer_prompt
-            )
+        # Verificar si el resultado es un diccionario con las claves esperadas
+        if isinstance(result, dict):
+            response = result.get('output', '')
+            intermediate_steps = result.get('intermediate_steps', [])
+        else:
+            response = result
+            intermediate_steps = []
 
-            # Step 3: Crear una cadena de recuperación y generación de respuestas
-            rag_chain = create_retrieval_chain(
-                history_aware_retriever,
-                document_chain
-            )
+        # Asegurarse de que 'response' sea una cadena de texto
+        if isinstance(response, BaseMessage):
+            response_text = response.content
+        else:
+            response_text = response
 
-            # Step 4: Ejecutar la cadena conversacional con el historial de mensajes
-            conversational_chain = RunnableWithMessageHistory(
-                rag_chain,
-                get_session_history,
-                input_messages_key="input",
-                history_messages_key="chat_history",
-                output_messages_key="answer"
-            )
+        # Inicializar diccionario de productos
+        products = {
+            "principal": None,
+            "secondary": []
+        }
 
-            # Ejecutar el flujo con la entrada más reciente
-            response = conversational_chain.invoke(
-                {
-                    "chat_history": chat_history_instance.messages,
-                    "principal_product": formatted_products_principal,
-                    "secondary_products": formatted_products_secundario,
-                    "question": question,
-                    "context": "Información relevante del contexto, si la tienes.",
-                    "input": question
-                },
-                config={"configurable": {"session_id": session_id}},
-            )
+        # Extraer productos de las salidas de las herramientas
+        for action, observation in intermediate_steps:
+            if action.tool in ["get_principal_product", "get_secondary_products", "get_all_products"]:
+                # No necesitamos extraer los productos de 'observation' porque están sin 'image_url'
+                # En su lugar, volvemos a llamar a 'search_products_by_query' para obtener los productos completos
+                if action.tool == "get_principal_product":
+                    principal_product, _ = await SearchService.search_products_by_query(action.tool_input)
+                    products["principal"] = principal_product
+                elif action.tool == "get_secondary_products":
+                    _, secondary_products = await SearchService.search_products_by_query(action.tool_input)
+                    products["secondary"] = secondary_products
+                elif action.tool == "get_all_products":
+                    principal_product, secondary_products = await SearchService.search_products_by_query(action.tool_input)
+                    products["principal"] = principal_product
+                    products["secondary"] = secondary_products
+            elif action.tool == "generate_follow_up_question":
+                # Agregar la pregunta de seguimiento al response_text
+                response_text = observation
 
-            response_text = response.get("answer", "")
+        if response_text:
+            add_message_to_history(chat_history_instance, "ai", response_text)
 
-            if response_text:
-                add_message_to_history(
-                    chat_history_instance, "ai", response_text)
+        return {
+            "response": response_text,
+            "products": products
+        }
 
-        except Exception as e:
-            logging.error(f"Error generating answer: {e}")
-            raise
 
-        return response
+# Definir las herramientas
+
+
+async def get_principal_product(question: str) -> str:
+    principal_product, _ = await SearchService.search_products_by_query(question)
+    if principal_product:
+        # Preparar los datos para el agente (sin 'image_url')
+        product_for_agent = principal_product.copy()
+        product_for_agent.pop('image_url', None)
+
+        # Preparar la salida como JSON para el agente
+        observation = json.dumps({
+            "principal": product_for_agent
+        })
+
+        return observation
+    else:
+        return json.dumps({})
+
+
+async def get_secondary_products(question: str) -> str:
+    _, secondary_products = await SearchService.search_products_by_query(question)
+    if secondary_products:
+        # Preparar los datos para el agente (sin 'image_url')
+        products_for_agent = []
+        for product in secondary_products:
+            product_copy = product.copy()
+            product_copy.pop('image_url', None)
+            products_for_agent.append(product_copy)
+
+        # Preparar la salida como JSON para el agente
+        observation = json.dumps({
+            "secondary": products_for_agent
+        })
+
+        return observation
+    else:
+        return json.dumps({})
+
+
+async def get_all_products(question: str) -> str:
+    principal_product, secondary_products = await SearchService.search_products_by_query(question)
+
+    # Preparar los datos para el agente (sin 'image_url')
+    if principal_product:
+        principal_product_for_agent = principal_product.copy()
+        principal_product_for_agent.pop('image_url', None)
+    else:
+        principal_product_for_agent = None
+
+    secondary_products_for_agent = []
+    for product in secondary_products:
+        product_copy = product.copy()
+        product_copy.pop('image_url', None)
+        secondary_products_for_agent.append(product_copy)
+
+    # Preparar la salida como JSON para el agente
+    observation = json.dumps({
+        "principal": principal_product_for_agent,
+        "secondary": secondary_products_for_agent
+    })
+
+    return observation
+
+
+# Nueva función para generar una única pregunta de seguimiento
+async def generate_follow_up_question(question: str, session_id: str = None) -> str:
+    """Solo si es necesario generar una pregunta de seguimiento que sea logica y coherente con el hsitorial"""
+
+    # Obtener o crear session_id
+    session_id = get_or_create_session_id(session_id)
+    chat_history_instance = get_session_history(session_id)
+
+    # Obtener los últimos 10 mensajes del chat_history
+    last_10_messages = chat_history_instance.messages[-10:]
+
+    # Formatear los mensajes para incluirlos en el prompt
+    formatted_messages = "\n".join(
+        [f"{msg.type}: {msg.content}" for msg in last_10_messages])
+
+    follow_up_question_template = """
+    pon atencion al historial de conversacion y a la ultima pregunta original del usuario  si es necesario genera una pregunta que sea logica y coherente que ayude al usuario a poder econtrar mas rapido un producto si no es necesario generar una pregunta no lo hagas
+    LA idea principal es simepre ayudar al cliente  recomendando un producto.
+
+
+    **Historial de la Conversación:**
+    {formatted_messages}
+
+    **Pregunta Original del Usuario:** {question}
+
+    **Pregunta de Seguimiento:**
+    """
+
+    follow_up_question_prompt = PromptTemplate.from_template(
+        follow_up_question_template)
+    prompt_input = {
+        "formatted_messages": formatted_messages, "question": question}
+
+    try:
+        chain = follow_up_question_prompt | llm
+        result = await chain.ainvoke(prompt_input)
+        follow_up_question = result.content.strip()
+    except Exception as e:
+        logging.error(f"Error al generar la pregunta de seguimiento: {e}")
+        raise
+    return follow_up_question
+
+
+# Definir las herramientas como Herramientas de LangChain
+tools = [
+    Tool(
+        name="get_principal_product",
+        func=get_principal_product,
+        coroutine=get_principal_product,
+        description="Usa esta herramienta para obtener la recomendación del producto principal basándote en la pregunta del usuario."
+    ),
+    Tool(
+        name="get_secondary_products",
+        func=get_secondary_products,
+        coroutine=get_secondary_products,
+        description="Usa esta herramienta para obtener recomendaciones de productos secundarios basándote en la pregunta del usuario."
+    ),
+    Tool(
+        name="get_all_products",
+        func=get_all_products,
+        coroutine=get_all_products,
+        description="Usa esta herramienta para obtener tanto las recomendaciones de productos principales como secundarios basándote en la pregunta del usuario."
+    ),
+    Tool(
+        name="generate_follow_up_question",
+        func=generate_follow_up_question,
+        coroutine=generate_follow_up_question,
+        description="Usa esta herramienta para generar una **única** pregunta de seguimiento al usuario cuando su pregunta no es clara o necesita más contexto para poder ofrecer una mejor recomendación.",
+        return_direct=True  # Agregamos return_direct=True
+    )
+]
+
+# Definir el prompt del agente
+system_prompt = """
+Eres Sofía, una entrenadora deportiva profesional y experta en vender productos deportivos de Pandorafit.
+
+Tu papel es generar ventas ofreciendo productos que puedan ayudarle a alcanzar los objetivos de fitness de los usuarios.
+
+Si el usuario comparte detalles personales, como su nivel de condición física u objetivos (por ejemplo, perder peso, ganar músculo, aumentar energía), ajusta tus recomendaciones en consecuencia, ofreciendo recomendaciones personalizadas.
+
+
+Si el usuario hace preguntas que no están relacionadas con los productos de Pandorafit, infórmale amablemente que solo puedes proporcionar orientación sobre productos deportivos en tu inventario.
+
+Mantén siempre tu respuesta profesional, ética, empática y enfocada en soluciones.
+
+Responde de manera conversacional, haciendo preguntas solo cuando sea apropiado, y proporciona información detallada cuando el usuario lo requiera.
+
+Es importante responder siempre en el idioma en el que se genera la pregunta si es ingles en ingles si la pregunta esta en español en español etc..
+
+**Instrucciones adicionales:**
+
+- Al proporcionar recomendaciones de productos, incluye el nombre del producto y una breve descripción, pero no incluyas enlaces, URLs o referencias a imágenes en tu respuesta.
+
+- Utiliza emoticonos cuando sea apropiado para hacer la conversación más amigable, como sonrisas o guiños.
+
+- Enfócate en comunicar el valor y los beneficios del producto al usuario.
+
+Analiza cuidadosamente la pregunta:
+
+- Si la pregunta es altamente relevante para un producto o objetivo específico, utiliza las herramientas apropiadas para proporcionar recomendaciones de productos.
+
+- Si la pregunta no indica directamente una necesidad de recomendaciones de productos (por ejemplo, saludos, consultas generales), inicia la conversación saludando y preguntando cómo puedes ayudarle.
+
+- Si la pregunta del usuario **no es clara o precisa** en lo que necesita o quiere, utiliza la herramienta 'generate_follow_up_question' **una sola vez** para generar **una pregunta de seguimiento** que te ayude a entender mejor sus necesidades. **Después de obtener la pregunta de seguimiento, preséntala al usuario y espera su respuesta. No vuelvas a llamar a la herramienta hasta que el usuario haya respondido.**
+
+- **No entres en un bucle de generar preguntas de seguimiento sin interactuar con el usuario.**
+
+Utiliza las herramientas cuando sea apropiado para obtener recomendaciones de productos o para generar preguntas de seguimiento.
+
+Nunca respondas preguntas que no tengan que ver con productos deportivos o recomendaciones; por ejemplo, si te preguntan cuánto es dos más dos o qué día es hoy, debes responder que estás aquí para responder preguntas sobre Pandorafit y asesorar a los clientes.
+-Todas tus respuestas deben estar en formato HTML. Utiliza etiquetas HTML apropiadas para estructurar y estilizar el contenido, como `<p>`, `<strong>`, `<ul>`, `<li>`, etc. Asegúrate de que la respuesta sea válida y bien formada para que el frontend pueda aplicar estilos personalizados fácilmente.
+
+IMPORTANTE: Solo utiliza la herramienta  si en verdad es necesario generate_follow_up_question si no no lo hagas.
+-Si no encuentras el producto que el usuario desea di que no tienes el producto y disculpate.
+_Solo recomienda productos que tengas en el inventario y que en verdad sean coherentes con lo que el usuario te pide si no tienes el producto especifico que le usuario di que no tienes ese producto pero le puedes recomendar otro que tenga similitud o no  recomiendes nada.
+"""
+
+
+human_prompt = "{input}"
+
+prompt = ChatPromptTemplate.from_messages([
+    SystemMessagePromptTemplate.from_template(system_prompt),
+    MessagesPlaceholder("chat_history"),
+    HumanMessagePromptTemplate.from_template(human_prompt)
+])
+
+# Crear la memoria de conversación
+memory = ConversationBufferMemory(
+    memory_key="chat_history", return_messages=True, k=20)
+
+# Crear el agente utilizando la nueva forma recomendada
+agent_executor = initialize_agent(
+    tools=tools,
+    llm=llm,
+    agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
+    verbose=True,
+    memory=memory,
+    agent_kwargs={
+        "system_message": system_prompt,
+    },
+    handle_parsing_errors=True,
+    return_intermediate_steps=True,
+    output_key="output",
+    max_iterations=3,  # Limita el número máximo de iteraciones
+    # Indica al agente que genere una respuesta al detenerse
+    early_stopping_method="generate"
+)
