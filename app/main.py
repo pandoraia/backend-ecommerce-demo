@@ -10,9 +10,9 @@ app = FastAPI()
 
 origins = [
     "http://localhost:3000",
-    "http://localhost:3001",  # La URL de tu frontend
-    "http://192.168.1.47:3000"
-
+    "http://localhost:3001",# La URL de tu frontend
+    "https://pandorai.ch",
+    "https://ecomerce-demo-pandorai.vercel.app",
 ]
 
 app.add_middleware(
@@ -31,9 +31,9 @@ app.include_router(
 app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
 app.include_router(orders.router, prefix="/api/v1/orders", tags=["Orders"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
-app.include_router(categories.router,
-                   prefix="/api/v1/categories", tags=["Categories"])
+app.include_router(categories.router, prefix="/api/v1/categories", tags=["Categories"])
 app.include_router(chatbot.router, prefix="/chatbot", tags=["Chatbot"])
+
 
 
 @app.get("/")
