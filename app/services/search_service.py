@@ -9,66 +9,29 @@ from app.core.config import settings
 from langchain.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
 import logging
 from app.services.product_service import get_product_by_slug
-from langchain_community.chat_message_histories import ChatMessageHistory
-from langchain_core.chat_history import BaseChatMessageHistory
-from langchain.chains import create_history_aware_retriever
-from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import create_retrieval_chain
+from langchain.memory.chat_message_histories import ChatMessageHistory
+from langchain.memory.chat_memory import BaseChatMessageHistory
+from langchain.agents import Tool
+from langchain.schema import BaseMessage
+from langchain.prompts import SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain.agents import ConversationalChatAgent, AgentExecutor
+from langchain.memory import ConversationBufferMemory
+import json
+import os
+from bs4 import BeautifulSoup
 
 
-# Crea el VectorStore para Pinecone con LangChain
-pinecone_vector_store = PineconeVectorStore(
-    index, embedder, text_key='product_slug')
+# Inicializar el modelo OpenAI
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1,
+                 openai_api_key=settings.openai_api_key)
 
-# Crear el retriever utilizando el adaptador de LangChain
-history_aware_retriever = pinecone_vector_store.as_retriever()
+if settings.langchain_tracing_v2:
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_ENDPOINT"] = settings.langchain_endpoint
+    os.environ["LANGCHAIN_API_KEY"] = settings.langchain_api_key
+    os.environ["LANGCHAIN_PROJECT"] = settings.langchain_project
 
-# Inicializa el modelo OpenAI
-llm = ChatOpenAI(openai_api_key=settings.openai_api_key)
-
-# Create standalone question prompt templates
-standalone_question_template = """
-Your task is to reformulate the given user question into a standalone question that sounds natural, as if the user is directly asking it. 
-
-Ensure that the standalone question makes sense on its own, without requiring any previous context. Preserve the user's original intent, details, and nuances, but make it clear and self-contained, as if it's the first time the question is being asked.
-
-If the original question is already self-explanatory, refine it slightly to make it sound more natural and conversational.
-
-**Original User Question:** {question}
-
-**Standalone Reformulated Question:** 
-"""
-standalone_question_prompt = PromptTemplate.from_template(
-    standalone_question_template)
-
-
-answer_template = """You are a professional sports coach and expert in selling sports products..
-
-Your role is to provide personalized advice based on the user's needs, offering Pandorafit products that can help them achieve their fitness goals.
-
-If the user shares personal details, such as their fitness level or goals (e.g. losing weight or gaining muscle), adjust your recommendations accordingly, suggesting relevant and coherent products and advice that relate to what the user is asking you.
-
-or example, offer cardio equipment for weight loss, strength training equipment for gaining muscle, or flexibility aids for recovery, depending on the conversation.
-If the user asks questions that are not related to Pandorafit products, kindly inform them that you can only provide guidance on sports products in your inventory. 
-Always keep your response professional, ethical, empathetic, and solution-focused. 
-Respond concisely, using a maximum of three sentences, and only recommend products that you have available.
-It is important to always respond in the language in which the person writes to you.
-
-
-Identify the product that most closely matches the customer's question or need from the {principal_product} variable, and suggest it as the primary recommendation. The other products in the {secondary_products} variable should be offered subtly as additional suggestions that could also meet the customer's needs.
-
-*Customer question:* {question}  
-*Context:*  
-{context}
-*Answer:*
-"""
-# answer_prompt = PromptTemplate.from_template(answer_template)
-
-# Crea el ChatPromptTemplate para manejar el historial de chat
-# chat_history_placeholder = MessagesPlaceholder(variable_name="chat_history")
-
-# Store para el historial de la sesión
+# Almacén para el historial de sesiones
 session_store = {}
 
 
