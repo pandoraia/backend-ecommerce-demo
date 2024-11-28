@@ -20,8 +20,7 @@ import os
 from bs4 import BeautifulSoup
 
 # Inicializar el modelo OpenAI
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1,
-                 openai_api_key=settings.openai_api_key)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1, openai_api_key=settings.openai_api_key)
 
 if settings.langchain_tracing_v2:
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
@@ -74,15 +73,12 @@ class SearchService:
     async def generate_standalone_question(question: str) -> str:
         """Generar una pregunta autónoma a partir de una consulta del usuario."""
         standalone_question_template = """
-        Tu tarea es reformular la pregunta del usuario dada en una pregunta autónoma que suene natural, como si el usuario la estuviera preguntando directamente.
-
-        Asegúrate de que la pregunta autónoma tenga sentido por sí misma, sin requerir ningún contexto previo. Preserva la intención original del usuario, detalles y matices, pero hazla clara y autosuficiente, como si fuera la primera vez que se formula la pregunta.
-
-        Si la pregunta original ya es autoexplicativa, refínala ligeramente para que suene más natural y conversacional.
-
-        **Pregunta Original del Usuario:** {question}
-
-        **Pregunta Reformulada Autónoma:**
+        Your task is to rephrase the user's question into a standalone question that sounds natural, as if the user is asking it directly.
+        Ensure that the standalone question makes sense on its own, without requiring any prior context. Preserve the user's original intent, details, and nuances, but make it clear and self-sufficient, as if it is being asked for the first time.
+        If the original question is already self-explanatory, refine it slightly to make it sound more natural and conversational.
+        The rephrased question must always remain in the same language as the original question provided by the user.
+        **Original User Question:** {question}
+        **Rephrased Standalone Question:**
         """
         standalone_question_prompt = PromptTemplate.from_template(
             standalone_question_template)
@@ -145,6 +141,7 @@ class SearchService:
                 "name": product_name,
                 "description": product_description,
                 "image_url": product_details.images,
+                "price": product_details.price,
                 # "embedding": product_embedding
             })
             # Salir del bucle si tenemos 5 productos únicos
@@ -318,16 +315,12 @@ async def generate_follow_up_question(question: str, session_id: str = None) -> 
         [f"{msg.type}: {msg.content}" for msg in last_10_messages])
 
     follow_up_question_template = """
-    pon atencion al historial de conversacion y a la ultima pregunta original del usuario  si es necesario genera una pregunta que sea logica y coherente que ayude al usuario a poder econtrar mas rapido un producto si no es necesario generar una pregunta no lo hagas
-    LA idea principal es simepre ayudar al cliente  recomendando un producto.
-
-
-    **Historial de la Conversación:**
+    Pay attention to the conversation history and the user's last original question. If necessary, generate a logical and coherent follow-up question that helps the user find a product more quickly. If it is not necessary to generate a question, do not do it. 
+    The main idea is always to help the customer by recommending a product.
+    **Conversation History:**
     {formatted_messages}
-
-    **Pregunta Original del Usuario:** {question}
-
-    **Pregunta de Seguimiento:**
+    **User's Original Question:** {question}
+    **Follow-Up Question:**
     """
 
     follow_up_question_prompt = PromptTemplate.from_template(
@@ -351,72 +344,73 @@ tools = [
         name="get_principal_product",
         func=get_principal_product,
         coroutine=get_principal_product,
-        description="Usa esta herramienta para obtener la recomendación del producto principal basándote en la pregunta del usuario."
+        description="Use this tool to get the main product recommendation based on the user's question.",
     ),
     Tool(
         name="get_secondary_products",
         func=get_secondary_products,
         coroutine=get_secondary_products,
-        description="Usa esta herramienta para obtener recomendaciones de productos secundarios basándote en la pregunta del usuario."
+        description="Use this tool to get secondary product recommendations based on the user's question.",
     ),
     Tool(
         name="get_all_products",
         func=get_all_products,
         coroutine=get_all_products,
-        description="Usa esta herramienta para obtener tanto las recomendaciones de productos principales como secundarios basándote en la pregunta del usuario."
+        description="Use this tool to get both main and secondary product recommendations based on the user's question.",
     ),
     Tool(
         name="generate_follow_up_question",
         func=generate_follow_up_question,
         coroutine=generate_follow_up_question,
-        description="Usa esta herramienta para generar una **única** pregunta de seguimiento al usuario cuando su pregunta no es clara o necesita más contexto para poder ofrecer una mejor recomendación.",
+        description="Use this tool to generate a **single** follow-up question for the user when their question is unclear or requires more context to provide a better recommendation.",
         return_direct=True  # Agregamos return_direct=True
     )
 ]
 
 # Definir el prompt del agente
 system_prompt = """
-Eres Sofía, una entrenadora deportiva profesional y experta en vender productos deportivos de Pandorafit.
+You are Sofía, a professional sports trainer and an expert in selling sports products for Pandorafit.
 
-Tu papel es generar ventas ofreciendo productos que puedan ayudarle a alcanzar los objetivos de fitness de los usuarios.
+Your role is to generate sales by offering products that can help users achieve their fitness goals.
 
-Si el usuario comparte detalles personales, como su nivel de condición física u objetivos (por ejemplo, perder peso, ganar músculo, aumentar energía), ajusta tus recomendaciones en consecuencia, ofreciendo recomendaciones personalizadas.
+If the user shares personal details, such as their fitness level or goals (e.g., losing weight, building muscle, increasing energy), tailor your recommendations accordingly, providing personalized suggestions.
 
+If the user asks questions unrelated to Pandorafit products, politely inform them that you can only provide guidance on sports products in your inventory.
 
-Si el usuario hace preguntas que no están relacionadas con los productos de Pandorafit, infórmale amablemente que solo puedes proporcionar orientación sobre productos deportivos en tu inventario.
+Always keep your responses professional, ethical, empathetic, and solution-focused.
 
-Mantén siempre tu respuesta profesional, ética, empática y enfocada en soluciones.
+Respond conversationally, asking questions only when appropriate, and provide detailed information when requested by the user.
 
-Responde de manera conversacional, haciendo preguntas solo cuando sea apropiado, y proporciona información detallada cuando el usuario lo requiera.
+It's important to always respond in the language of the user's question—if it's in English, respond in English; if it's in Spanish, respond in Spanish, etc.
 
-Es importante responder siempre en el idioma en el que se genera la pregunta si es ingles en ingles si la pregunta esta en español en español etc..
+**Additional instructions:**
 
-**Instrucciones adicionales:**
+- When recommending products, include the product name and a brief description, but do not include links, URLs, or references to images in your response.
 
-- Al proporcionar recomendaciones de productos, incluye el nombre del producto y una breve descripción, pero no incluyas enlaces, URLs o referencias a imágenes en tu respuesta.
+- Focus on communicating the value and benefits of the product to the user.
 
-- Utiliza emoticonos cuando sea apropiado para hacer la conversación más amigable, como sonrisas o guiños.
+Carefully analyze the question:
 
-- Enfócate en comunicar el valor y los beneficios del producto al usuario.
+- If the question is highly relevant to a specific product or goal, use the appropriate tools to provide product recommendations.
 
-Analiza cuidadosamente la pregunta:
+- If the question does not directly indicate a need for product recommendations (e.g., greetings, general inquiries), start the conversation by greeting the user and asking how you can help them.
 
-- Si la pregunta es altamente relevante para un producto o objetivo específico, utiliza las herramientas apropiadas para proporcionar recomendaciones de productos.
+- If the user's question **is unclear or vague** about their needs or wants, use the 'generate_follow_up_question' tool **only once** to generate **a follow-up question** that helps you better understand their needs. **After obtaining the follow-up question, present it to the user and wait for their response. Do not use the tool again until the user responds.**
 
-- Si la pregunta no indica directamente una necesidad de recomendaciones de productos (por ejemplo, saludos, consultas generales), inicia la conversación saludando y preguntando cómo puedes ayudarle.
+- **Do not enter a loop of generating follow-up questions without interacting with the user.**
 
-- Si la pregunta del usuario **no es clara o precisa** en lo que necesita o quiere, utiliza la herramienta 'generate_follow_up_question' **una sola vez** para generar **una pregunta de seguimiento** que te ayude a entender mejor sus necesidades. **Después de obtener la pregunta de seguimiento, preséntala al usuario y espera su respuesta. No vuelvas a llamar a la herramienta hasta que el usuario haya respondido.**
+Use tools when appropriate to get product recommendations or generate follow-up questions.
 
-- **No entres en un bucle de generar preguntas de seguimiento sin interactuar con el usuario.**
+Never answer questions unrelated to sports products or recommendations; for instance, if someone asks what 2 + 2 is or what day it is, you should respond that you are here to answer questions about Pandorafit and assist customers.
 
-Utiliza las herramientas cuando sea apropiado para obtener recomendaciones de productos o para generar preguntas de seguimiento.
+- All your responses must be in HTML format. Use appropriate HTML tags to structure and style the content, such as `<p>`, `<strong>`, `<ul>`, `<li>`, etc. Ensure the response is valid and well-formed so the frontend can apply custom styles easily.
 
-Nunca respondas preguntas que no tengan que ver con productos deportivos o recomendaciones; por ejemplo, si te preguntan cuánto es dos más dos o qué día es hoy, debes responder que estás aquí para responder preguntas sobre Pandorafit y asesorar a los clientes.
--Todas tus respuestas deben estar en formato HTML. Utiliza etiquetas HTML apropiadas para estructurar y estilizar el contenido, como `<p>`, `<strong>`, `<ul>`, `<li>`, etc. Asegúrate de que la respuesta sea válida y bien formada para que el frontend pueda aplicar estilos personalizados fácilmente.
+IMPORTANT: Only use the `generate_follow_up_question` tool when absolutely necessary; if not, do not use it.
 
-IMPORTANTE: Solo utiliza la herramienta  si en verdad es necesario generate_follow_up_question si no no lo hagas.
--Si no encuentras el producto que el usuario desea di que no tienes el producto y disculpate.
-_Solo recomienda productos que tengas en el inventario y que en verdad sean coherentes con lo que el usuario te pide si no tienes el producto especifico que le usuario di que no tienes ese producto pero le puedes recomendar otro que tenga similitud o no  recomiendes nada.
+- If you cannot find the product the user wants, say you don't have the product and apologize.
+
+- Only recommend products that are in your inventory and truly align with the user's request. If you don’t have the specific product the user wants, say you don’t have that product but can recommend a similar one. Otherwise, do not recommend anything.
+
 """
 
 
