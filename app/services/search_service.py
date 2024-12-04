@@ -18,6 +18,8 @@ from langchain.memory import ConversationBufferMemory
 import json
 import os
 from bs4 import BeautifulSoup
+from app.services.mongo_chat_history import MongoDBChatMessageHistory
+from langchain.schema import BaseMessage, AIMessage, HumanMessage
 
 # Inicializar el modelo OpenAI
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1, openai_api_key=settings.openai_api_key)
@@ -170,23 +172,26 @@ class SearchService:
 
     @staticmethod
     async def generate_answer(question: str, session_id: str = None) -> Dict[str, Any]:
-        """Generar una respuesta final a la pregunta del usuario utilizando un agente con herramientas."""
+        """Genera una respuesta final considerando las últimas 10 interacciones."""
 
-        def validate_html(html_content: str) -> str:
-            soup = BeautifulSoup(html_content, "html.parser")
-            return str(soup)
+        # Crear el historial del chat desde MongoDB
+        agent_name = "Sofia"
+        chat_history = MongoDBChatMessageHistory(agent_name, session_id)
 
-        # Obtener o crear session_id
-        session_id = get_or_create_session_id(session_id)
-        chat_history_instance = get_session_history(session_id)
+        # Agregar la consulta del usuario al historial
+        await chat_history.add_message(HumanMessage(content=question))
 
-        # Agregar la pregunta al historial
-        add_message_to_history(chat_history_instance, "human", question)
+        # Crear la memoria con el historial cargado
+        memory = ConversationBufferMemory(
+            chat_memory=chat_history,
+            memory_key="chat_history",
+            return_messages=True
+        )
 
-        # Ejecutar el agente de manera asíncrona
+        # Ejecutar el agente
         result = await agent_executor.ainvoke({"input": question})
 
-        # Verificar si el resultado es un diccionario con las claves esperadas
+        # Extraer la respuesta y las acciones intermedias
         if isinstance(result, dict):
             response = result.get('output', '')
             intermediate_steps = result.get('intermediate_steps', [])
@@ -194,23 +199,20 @@ class SearchService:
             response = result
             intermediate_steps = []
 
-        # Asegurarse de que 'response' sea una cadena de texto
+        # Procesar la respuesta final
         if isinstance(response, BaseMessage):
             response_text = response.content
         else:
             response_text = response
 
-        # Inicializar diccionario de productos
-        products = {
-            "principal": None,
-            "secondary": []
-        }
+        # Guardar la respuesta en el historial
+        if response_text:
+            await chat_history.add_message(AIMessage(content=response_text))
 
-        # Extraer productos de las salidas de las herramientas
+        # Productos recomendados (si aplica)
+        products = {"principal": None, "secondary": []}
         for action, observation in intermediate_steps:
             if action.tool in ["get_principal_product", "get_secondary_products", "get_all_products"]:
-                # No necesitamos extraer los productos de 'observation' porque están sin 'image_url'
-                # En su lugar, volvemos a llamar a 'search_products_by_query' para obtener los productos completos
                 if action.tool == "get_principal_product":
                     principal_product, _ = await SearchService.search_products_by_query(action.tool_input)
                     products["principal"] = principal_product
@@ -221,18 +223,8 @@ class SearchService:
                     principal_product, secondary_products = await SearchService.search_products_by_query(action.tool_input)
                     products["principal"] = principal_product
                     products["secondary"] = secondary_products
-            elif action.tool == "generate_follow_up_question":
-                # Agregar la pregunta de seguimiento al response_text
-                response_text = observation
 
-        if response_text:
-            add_message_to_history(chat_history_instance, "ai", response_text)
-
-        return {
-            "response": response_text,
-            "products": products
-        }
-
+        return {"response": response_text, "products": products}
 
 # Definir las herramientas
 
@@ -301,41 +293,34 @@ async def get_all_products(question: str) -> str:
 
 # Nueva función para generar una única pregunta de seguimiento
 async def generate_follow_up_question(question: str, session_id: str = None) -> str:
-    """Solo si es necesario generar una pregunta de seguimiento que sea logica y coherente con el hsitorial"""
+    """Genera una pregunta de seguimiento basada en las últimas 10 interacciones."""
 
-    # Obtener o crear session_id
-    session_id = get_or_create_session_id(session_id)
-    chat_history_instance = get_session_history(session_id)
+    agent_name = "Sofia"
+    chat_history = MongoDBChatMessageHistory(agent_name, session_id)
 
-    # Obtener los últimos 10 mensajes del chat_history
-    last_10_messages = chat_history_instance.messages[-10:]
+    # Obtener las últimas 10 interacciones
+    last_10_messages = await chat_history.aget_messages()
 
-    # Formatear los mensajes para incluirlos en el prompt
+    # Formatear los mensajes
     formatted_messages = "\n".join(
-        [f"{msg.type}: {msg.content}" for msg in last_10_messages])
+        [f"{'User' if isinstance(msg, HumanMessage) else 'Sofia'}: {msg.content}" for msg in last_10_messages]
+    )
 
+    # Generar la pregunta de seguimiento
     follow_up_question_template = """
-    Pay attention to the conversation history and the user's last original question. If necessary, generate a logical and coherent follow-up question that helps the user find a product more quickly. If it is not necessary to generate a question, do not do it. 
-    The main idea is always to help the customer by recommending a product.
+    Based on the conversation history and the user's last question, generate a clear and concise follow-up question if necessary.
     **Conversation History:**
     {formatted_messages}
     **User's Original Question:** {question}
     **Follow-Up Question:**
     """
+    follow_up_question_prompt = PromptTemplate.from_template(follow_up_question_template)
+    prompt_input = {"formatted_messages": formatted_messages, "question": question}
 
-    follow_up_question_prompt = PromptTemplate.from_template(
-        follow_up_question_template)
-    prompt_input = {
-        "formatted_messages": formatted_messages, "question": question}
+    chain = follow_up_question_prompt | llm
+    result = await chain.ainvoke(prompt_input)
+    return result.content.strip()
 
-    try:
-        chain = follow_up_question_prompt | llm
-        result = await chain.ainvoke(prompt_input)
-        follow_up_question = result.content.strip()
-    except Exception as e:
-        logging.error(f"Error al generar la pregunta de seguimiento: {e}")
-        raise
-    return follow_up_question
 
 
 # Definir las herramientas como Herramientas de LangChain

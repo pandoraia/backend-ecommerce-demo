@@ -12,6 +12,7 @@ db = client[settings.mongo_db_name]
 admin_collection = db['admins']
 products_collection = db['products']
 categories_collection = db['categories']
+agents_collection = db['agents']
 
 
 async def connect_to_mongo():
