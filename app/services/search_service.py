@@ -20,9 +20,64 @@ import os
 from bs4 import BeautifulSoup
 from app.services.mongo_chat_history import MongoDBChatMessageHistory
 from langchain.schema import BaseMessage, AIMessage, HumanMessage
+import re
+
+
+import re
+
+
+def convert_markdown_to_html(text: str) -> str:
+    """
+    Convierte patrones sencillos de Markdown en HTML:
+      - **texto** => <strong>texto</strong>
+      - _texto_ => <em>texto</em>
+      - Elimina triple backticks ``` (si los hubiera).
+      - Puedes añadir más reglas según tus necesidades.
+    """
+    # Reemplazar **texto** por <strong>texto</strong>
+    bold_pattern = r"\*\*(.*?)\*\*"
+    text = re.sub(bold_pattern, r"<strong>\1</strong>", text)
+
+    # Reemplazar _texto_ por <em>texto</em>
+    italic_pattern = r"_(.*?)_"
+    text = re.sub(italic_pattern, r"<em>\1</em>", text)
+
+    # Eliminar bloques de triple backticks
+    triple_backticks_pattern = r"```(.*?)```"
+    text = re.sub(triple_backticks_pattern, r"\1", text, flags=re.DOTALL)
+
+    return text
+
+
+# === CHANGE ===
+# Nueva función para asegurar que la respuesta contenga HTML
+
+
+def ensure_html_format(response: str) -> str:
+    """
+    Verifica si 'response' contiene etiquetas HTML básicas.
+    Si no las encuentra, la envuelve todo el contenido en <p></p>.
+    Además, hace una limpieza de Markdown usando 'convert_markdown_to_html'.
+    """
+    # 1) Convertir markdown a HTML básico
+    response = convert_markdown_to_html(response)
+
+    # 2) Ver si existen etiquetas HTML
+    html_tags = ["<p>", "<ul>", "<ol>", "<li>",
+                 "<div>", "<span>", "<strong>", "<em>"]
+    if not any(tag in response.lower() for tag in html_tags):
+        # Si no encontró ninguna etiqueta, entonces envuelve en <p>...</p>
+        return f"<p>{response}</p>"
+
+    return response
+
 
 # Inicializar el modelo OpenAI
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1, openai_api_key=settings.openai_api_key)
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0,
+    openai_api_key=settings.openai_api_key
+)
 
 if settings.langchain_tracing_v2:
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
@@ -86,11 +141,8 @@ class SearchService:
             standalone_question_template)
         prompt_input = {"question": question}
         try:
-            # Usando RunnableSequence en lugar de LLMChain
             chain = standalone_question_prompt | llm
-            # Ejecutar la cadena y obtener el resultado
             result = await chain.ainvoke(prompt_input)
-            # Obtener el contenido del mensaje
             standalone_question = result.content
         except Exception as e:
             logging.error(f"Error al generar la pregunta autónoma: {e}")
@@ -134,9 +186,6 @@ class SearchService:
             product_name = selected_translation.name if selected_translation else "Nombre no disponible"
             product_description = selected_translation.description if selected_translation else "Descripción no disponible"
 
-            # Eliminar 'embedding' para evitar problemas de serialización
-            # product_embedding = embedder.embed_query(product_description)
-
             recommended_products.append({
                 "slug": product_slug,
                 "lang": product_lang,
@@ -144,8 +193,8 @@ class SearchService:
                 "description": product_description,
                 "image_url": product_details.images,
                 "price": product_details.price,
-                # "embedding": product_embedding
             })
+
             # Salir del bucle si tenemos 5 productos únicos
             if len(recommended_products) >= 5:
                 break
@@ -163,7 +212,6 @@ class SearchService:
             recommended_products.sort(
                 key=lambda x: x["similarity"], reverse=True)
             principal_product = recommended_products[0]
-            # Tomar los siguientes 4 como productos secundarios
             secondary_products = recommended_products[1:5]
 
             return principal_product, secondary_products
@@ -172,9 +220,8 @@ class SearchService:
 
     @staticmethod
     async def generate_answer(question: str, session_id: str = None) -> Dict[str, Any]:
-        """Genera una respuesta final considerando las últimas 10 interacciones."""
+        """Genera una respuesta final considerando las últimas 20 interacciones."""
 
-        # Crear el historial del chat desde MongoDB
         agent_name = "Sofia"
         chat_history = MongoDBChatMessageHistory(agent_name, session_id)
 
@@ -204,6 +251,10 @@ class SearchService:
             response_text = response.content
         else:
             response_text = response
+
+        # === CHANGE ===
+        # Asegurar que la respuesta final sea en HTML
+        response_text = ensure_html_format(response_text)
 
         # Guardar la respuesta en el historial
         if response_text:
@@ -236,7 +287,6 @@ async def get_principal_product(question: str) -> str:
         product_for_agent = principal_product.copy()
         product_for_agent.pop('image_url', None)
 
-        # Preparar la salida como JSON para el agente
         observation = json.dumps({
             "principal": product_for_agent
         })
@@ -249,14 +299,12 @@ async def get_principal_product(question: str) -> str:
 async def get_secondary_products(question: str) -> str:
     _, secondary_products = await SearchService.search_products_by_query(question)
     if secondary_products:
-        # Preparar los datos para el agente (sin 'image_url')
         products_for_agent = []
         for product in secondary_products:
             product_copy = product.copy()
             product_copy.pop('image_url', None)
             products_for_agent.append(product_copy)
 
-        # Preparar la salida como JSON para el agente
         observation = json.dumps({
             "secondary": products_for_agent
         })
@@ -269,7 +317,6 @@ async def get_secondary_products(question: str) -> str:
 async def get_all_products(question: str) -> str:
     principal_product, secondary_products = await SearchService.search_products_by_query(question)
 
-    # Preparar los datos para el agente (sin 'image_url')
     if principal_product:
         principal_product_for_agent = principal_product.copy()
         principal_product_for_agent.pop('image_url', None)
@@ -282,7 +329,6 @@ async def get_all_products(question: str) -> str:
         product_copy.pop('image_url', None)
         secondary_products_for_agent.append(product_copy)
 
-    # Preparar la salida como JSON para el agente
     observation = json.dumps({
         "principal": principal_product_for_agent,
         "secondary": secondary_products_for_agent
@@ -290,23 +336,21 @@ async def get_all_products(question: str) -> str:
 
     return observation
 
-
 # Nueva función para generar una única pregunta de seguimiento
-async def generate_follow_up_question(question: str, session_id: str = None) -> str:
-    """Genera una pregunta de seguimiento basada en las últimas 10 interacciones."""
 
+
+async def generate_follow_up_question(question: str, session_id: str = None) -> str:
+    """Genera una pregunta de seguimiento basada en las últimas 20 interacciones."""
     agent_name = "Sofia"
     chat_history = MongoDBChatMessageHistory(agent_name, session_id)
 
     # Obtener las últimas 10 interacciones
     last_10_messages = await chat_history.aget_messages()
 
-    # Formatear los mensajes
     formatted_messages = "\n".join(
         [f"{'User' if isinstance(msg, HumanMessage) else 'Sofia'}: {msg.content}" for msg in last_10_messages]
     )
 
-    # Generar la pregunta de seguimiento
     follow_up_question_template = """
     Based on the conversation history and the user's last question, generate a clear and concise follow-up question if necessary.
     **Conversation History:**
@@ -314,14 +358,16 @@ async def generate_follow_up_question(question: str, session_id: str = None) -> 
     **User's Original Question:** {question}
     **Follow-Up Question:**
     """
-    follow_up_question_prompt = PromptTemplate.from_template(follow_up_question_template)
-    prompt_input = {"formatted_messages": formatted_messages, "question": question}
+    follow_up_question_prompt = PromptTemplate.from_template(
+        follow_up_question_template)
+    prompt_input = {
+        "formatted_messages": formatted_messages,
+        "question": question
+    }
 
     chain = follow_up_question_prompt | llm
     result = await chain.ainvoke(prompt_input)
     return result.content.strip()
-
-
 
 # Definir las herramientas como Herramientas de LangChain
 tools = [
@@ -347,57 +393,58 @@ tools = [
         name="generate_follow_up_question",
         func=generate_follow_up_question,
         coroutine=generate_follow_up_question,
-        description="Use this tool to generate a **single** follow-up question for the user when their question is unclear or requires more context to provide a better recommendation.",
-        return_direct=True  # Agregamos return_direct=True
+        description="Use this tool to generate a **single** follow-up question for the user when their question is unclear or requires more context.",
+        return_direct=True
     )
 ]
 
-# Definir el prompt del agente
+# === CHANGE ===
+# Hemos reforzado la parte final del system_prompt con "IMPORTANT"
 system_prompt = """
-You are Sofía, a professional sports trainer and an expert in selling sports products for Pandorafit.
+You are Sofía, a professional sports coach and an expert in selling sports products for Pandorafit.
 
 Your role is to generate sales by offering products that can help users achieve their fitness goals.
 
-If the user shares personal details, such as their fitness level or goals (e.g., losing weight, building muscle, increasing energy), tailor your recommendations accordingly, providing personalized suggestions.
+If the user shares personal details, such as their fitness level or goals (e.g., losing weight, building muscle, increasing energy), tailor your recommendations accordingly by providing personalized suggestions.
 
-If the user asks questions unrelated to Pandorafit products, politely inform them that you can only provide guidance on sports products in your inventory.
+If the user asks questions unrelated to Pandorafit's products, politely inform them that you can only provide guidance on the sports products in your inventory.
 
-Always keep your responses professional, ethical, empathetic, and solution-focused.
+Always maintain your responses as professional, ethical, empathetic, and solution-focused.
 
-Respond conversationally, asking questions only when appropriate, and provide detailed information when requested by the user.
+Respond conversationally, asking questions only when appropriate, and provide detailed information when the user requests it.
 
-It's important to always respond in the language of the user's question—if it's in English, respond in English; if it's in Spanish, respond in Spanish, etc.
+It is essential to always reply in the language of the user's question: if it's in English, reply in English; if it's in Spanish, reply in Spanish, etc.
 
-**Additional instructions:**
+Additional Instructions:
 
-- When recommending products, include the product name and a brief description, but do not include links, URLs, or references to images in your response.
+When recommending products, include the product name and a brief description, but do not include links, URLs, or references to images in your response.
 
-- Focus on communicating the value and benefits of the product to the user.
+Focus on communicating the value and benefits of the product to the user.
 
 Carefully analyze the question:
-
 - If the question is highly relevant to a specific product or goal, use the appropriate tools to provide product recommendations.
-
 - If the question does not directly indicate a need for product recommendations (e.g., greetings, general inquiries), start the conversation by greeting the user and asking how you can help them.
+- If the user's question is unclear or vague about their needs or wants, use the 'generate_follow_up_question' tool only once every four interactions to generate a follow-up question that helps you better understand their needs. After obtaining the follow-up question, present it to the user and wait for their response. Do not use the tool again until the user responds.
+- Avoid entering a loop of generating follow-up questions without interacting with the user.
+- Use tools when appropriate to obtain product recommendations or generate follow-up questions.
+- Never answer questions unrelated to sports products or recommendations. If someone asks how much 2 + 2 is or what day it is, respond that you are here to answer questions about Pandorafit and assist customers.
+- If you cannot find the product the user is looking for, say you do not have it and apologize.
+- Recommend only products that are in your inventory and truly align with the user's request. If you do not have the specific product the user wants, say you do not have that product but can recommend a similar one. Otherwise, do not recommend anything.
 
-- If the user's question **is unclear or vague** about their needs or wants, use the 'generate_follow_up_question' tool **only once** to generate **a follow-up question** that helps you better understand their needs. **After obtaining the follow-up question, present it to the user and wait for their response. Do not use the tool again until the user responds.**
-
-- **Do not enter a loop of generating follow-up questions without interacting with the user.**
-
-Use tools when appropriate to get product recommendations or generate follow-up questions.
-
-Never answer questions unrelated to sports products or recommendations; for instance, if someone asks what 2 + 2 is or what day it is, you should respond that you are here to answer questions about Pandorafit and assist customers.
-
-- All your responses must be in HTML format. Use appropriate HTML tags to structure and style the content, such as `<p>`, `<strong>`, `<ul>`, `<li>`, etc. Ensure the response is valid and well-formed so the frontend can apply custom styles easily.
-
-IMPORTANT: Only use the `generate_follow_up_question` tool when absolutely necessary; if not, do not use it.
-
-- If you cannot find the product the user wants, say you don't have the product and apologize.
-
-- Only recommend products that are in your inventory and truly align with the user's request. If you don’t have the specific product the user wants, say you don’t have that product but can recommend a similar one. Otherwise, do not recommend anything.
+IMPORTANT:
+1) ALL your responses MUST be in valid HTML.
+2) Never return plain text, JSON, Markdown triple backticks, or code fences unless it is wrapped in HTML tags.
+3) If you provide a list, use <ul> <li> or <ol> <li>.
+4) Always ensure the final message is properly closed in HTML.
+5) Only use the 'generate_follow_up_question' tool if the user’s request is unclear or ambiguous.
+6) You must not use 'generate_follow_up_question' more than once every three user interactions.
+7) If the user's question is direct and clear, answer concisely without asking an additional question.
+8) Do not ask irrelevant or overly generic follow-up questions unless they are necessary to clarify user needs.
+9)Use ONLY HTML tags to format your responses. 
+10)Do NOT use Markdown syntax (like ** or ```).
+11)If you format text as bold, use <strong>. For italics, use <em>.
 
 """
-
 
 human_prompt = "{input}"
 
@@ -407,11 +454,12 @@ prompt = ChatPromptTemplate.from_messages([
     HumanMessagePromptTemplate.from_template(human_prompt)
 ])
 
-# Crear la memoria de conversación
 memory = ConversationBufferMemory(
-    memory_key="chat_history", return_messages=True, k=20)
+    memory_key="chat_history",
+    return_messages=True,
+    k=30
+)
 
-# Crear el agente utilizando la nueva forma recomendada
 agent_executor = initialize_agent(
     tools=tools,
     llm=llm,
@@ -424,7 +472,6 @@ agent_executor = initialize_agent(
     handle_parsing_errors=True,
     return_intermediate_steps=True,
     output_key="output",
-    max_iterations=3,  # Limita el número máximo de iteraciones
-    # Indica al agente que genere una respuesta al detenerse
+    max_iterations=3,
     early_stopping_method="generate"
 )

@@ -14,7 +14,7 @@ class MongoDBChatMessageHistory(BaseChatMessageHistory):
         self.messages = []
 
     async def _load_messages(self):
-        """Carga los últimos 10 mensajes desde MongoDB de forma asíncrona."""
+        """Carga los últimos 20 mensajes desde MongoDB de forma asíncrona."""
         agent_doc = await agents_collection.find_one({'name': self.agent_name})
         messages = []
         if agent_doc:
@@ -25,10 +25,11 @@ class MongoDBChatMessageHistory(BaseChatMessageHistory):
                 # Obtener los últimos 10 mensajes ordenados por 'time' descendente
                 sorted_messages = sorted(
                     conversation.get('messages', []),
-                    key=lambda x: x['time'], 
+                    key=lambda x: x['time'],
                     reverse=True
-                )[:10]  # Limitar a 10 mensajes
-                for msg_data in sorted_messages[::-1]:  # Invertir para obtener en orden cronológico
+                )[:20]  # Limitar a 10 mensajes
+                # Invertir para obtener en orden cronológico
+                for msg_data in sorted_messages[::-1]:
                     if msg_data['sender'] == 'user':
                         messages.append(HumanMessage(content=msg_data['text']))
                     elif msg_data['sender'] == 'bot':
