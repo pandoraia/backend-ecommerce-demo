@@ -13,6 +13,7 @@ admin_collection = db['admins']
 products_collection = db['products']
 categories_collection = db['categories']
 agents_collection = db['agents']
+user_collection = db['users']
 
 
 async def connect_to_mongo():

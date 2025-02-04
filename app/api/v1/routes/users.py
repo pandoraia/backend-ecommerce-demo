@@ -1,13 +1,37 @@
-# app/api/v1/routes/products.py
-from fastapi import APIRouter, HTTPException
-from app.models.product import Product
-from app.services.product_service import get_all_products
+from datetime import datetime
+from fastapi import APIRouter, HTTPException, Depends, Query
+from app.services.user_services import register_user, get_all_users, get_user_by_email
+from app.models.user_models import RegisterUser, UserResponse
 
+from typing import List, Optional
 router = APIRouter()
 
-@router.get("/")
-async def list_products():
-    products = await get_all_products()
-    if not products:
-        raise HTTPException(status_code=404, detail="No products found")
-    return products
+@router.post("/register", response_model=UserResponse, status_code=201)
+async def register_user_endpoint(user_data: RegisterUser):
+    """
+    Endpoint para registrar un nuevo usuario.
+    """
+    user_id = await register_user(user_data)
+    return {
+        "id": user_id,
+        "first_name": user_data.first_name,
+        "last_name": user_data.last_name,
+        "email": user_data.email,
+        "country_code": user_data.country_code,
+        "phone": user_data.phone,
+        "birth_date": user_data.birth_date,
+        "created_at": datetime.utcnow(),
+    }
+
+
+@router.get("/", response_model=List[UserResponse])
+async def get_users_endpoint(email: Optional[str] = Query(None)):
+    """
+    Endpoint para obtener usuarios. Filtra por email si se proporciona.
+    """
+    if email:
+        user = await get_user_by_email(email)
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        return [user]
+    return await get_all_users()
