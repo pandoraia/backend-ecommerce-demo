@@ -21,6 +21,8 @@ def validate_html(html_content: str) -> str:
 async def handle_user_query(user_query: UserQuery):
     query = user_query.query
     user_uuid = user_query.userUUID
+    print(f"User id form enpoitn1: {user_uuid}")
+
     # Generar la respuesta y obtener los productos
     result = await SearchService.generate_answer(query, session_id=user_uuid)
     response = result["response"]

@@ -1,6 +1,5 @@
 from langchain.agents import initialize_agent, AgentType
 import numpy as np
-import asyncio
 from langchain_openai import ChatOpenAI
 from app.services.vectorization_service import embedder, index
 from typing import List, Dict, Any
@@ -13,18 +12,12 @@ from langchain.memory.chat_memory import BaseChatMessageHistory
 from langchain.agents import Tool
 from langchain.schema import BaseMessage
 from langchain.prompts import SystemMessagePromptTemplate, HumanMessagePromptTemplate
-from langchain.agents import ConversationalChatAgent, AgentExecutor
 from langchain.memory import ConversationBufferMemory
 import json
 import os
-from bs4 import BeautifulSoup
 from app.services.mongo_chat_history import MongoDBChatMessageHistory
 from langchain.schema import BaseMessage, AIMessage, HumanMessage
 import re
-
-
-import re
-
 
 def convert_markdown_to_html(text: str) -> str:
     """
@@ -47,11 +40,6 @@ def convert_markdown_to_html(text: str) -> str:
     text = re.sub(triple_backticks_pattern, r"\1", text, flags=re.DOTALL)
 
     return text
-
-
-# === CHANGE ===
-# Nueva función para asegurar que la respuesta contenga HTML
-
 
 def ensure_html_format(response: str) -> str:
     """
@@ -88,7 +76,6 @@ if settings.langchain_tracing_v2:
 # Almacén para el historial de sesiones
 session_store = {}
 
-
 def add_message_to_history(chat_history_instance, message_type, message_content):
     """Agregar un mensaje al historial de chat, asegurando que no esté duplicado."""
     existing_messages = [
@@ -123,7 +110,6 @@ def cosine_similarity(vec_a, vec_b):
     b = np.array(vec_b)
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-
 class SearchService:
 
     @staticmethod
@@ -155,11 +141,11 @@ class SearchService:
         # Obtener o crear el session_id
         session_id = get_or_create_session_id(session_id)
         chat_history_instance = get_session_history(session_id)
+ 
         add_message_to_history(chat_history_instance, "human", user_query)
 
         # Generar una pregunta autónoma
         standalone_question = await SearchService.generate_standalone_question(user_query)
-        print(f"Aquí está la pregunta autónoma: >>> {standalone_question}")
 
         # Generar embedding para la pregunta autónoma
         embedding = embedder.embed_query(standalone_question)
@@ -174,10 +160,8 @@ class SearchService:
             # Saltar si ya hemos procesado este producto
             if product_slug in seen_product_slugs:
                 continue
-
             seen_product_slugs.add(product_slug)
             product_details = await get_product_by_slug(product_slug)
-
             # Acceder a la traducción del producto basada en el idioma
             product_translations = product_details.translations
             selected_translation = product_translations.get(
@@ -219,33 +203,56 @@ class SearchService:
         return None, []  # Retornar None si no hay productos recomendados
 
     @staticmethod
-    async def generate_answer(question: str, session_id: str = None) -> Dict[str, Any]:
+    async def generate_answer(question: str, session_id: str ) -> Dict[str, Any]:
         """Genera una respuesta final considerando las últimas 20 interacciones."""
 
         agent_name = "Sofia"
         chat_history = MongoDBChatMessageHistory(agent_name, session_id)
+        
+        # 🔹 Precargar historial en memoria antes de usarlo
+        await chat_history._load_messages()
 
-        # Agregar la consulta del usuario al historial
-        await chat_history.add_message(HumanMessage(content=question))
-
-        # Crear la memoria con el historial cargado
+        # 🔹 Inicializar memoria con historial de MongoDB
         memory = ConversationBufferMemory(
             chat_memory=chat_history,
             memory_key="chat_history",
-            return_messages=True
+            return_messages=True,
+            output_key="output"
         )
 
-        # Ejecutar el agente
+        # 🔹 Verificar que la memoria contenga mensajes previos
+        print(f"Mensajes antes de agregar nuevos: {[msg.content for msg in memory.chat_memory.messages]}")
+        
+        agent_executor = initialize_agent(
+            tools=tools,
+            llm=llm,
+            agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
+            verbose=True,
+            memory=memory,
+            agent_kwargs={ "system_message": system_prompt,},
+            handle_parsing_errors=True,
+            return_intermediate_steps=True,
+            output_key="output",
+            max_iterations=3,
+            early_stopping_method="generate"
+        )
+
+        # Agregar la consulta del usuario al historial
+        await chat_history.add_message(HumanMessage(content=question))
         result = await agent_executor.ainvoke({"input": question})
 
         # Extraer la respuesta y las acciones intermedias
+        last_20_messages = await chat_history.aget_messages()
+        formatted_messages = "\n".join(
+        [f"{'User' if isinstance(msg, HumanMessage) else 'Sofia'}: {msg.content}" for msg in last_20_messages]
+        )
+        print(f"Formateado: {formatted_messages}")
         if isinstance(result, dict):
             response = result.get('output', '')
             intermediate_steps = result.get('intermediate_steps', [])
         else:
             response = result
             intermediate_steps = []
-
         # Procesar la respuesta final
         if isinstance(response, BaseMessage):
             response_text = response.content
@@ -277,8 +284,6 @@ class SearchService:
 
         return {"response": response_text, "products": products}
 
-# Definir las herramientas
-
 
 async def get_principal_product(question: str) -> str:
     principal_product, _ = await SearchService.search_products_by_query(question)
@@ -286,11 +291,9 @@ async def get_principal_product(question: str) -> str:
         # Preparar los datos para el agente (sin 'image_url')
         product_for_agent = principal_product.copy()
         product_for_agent.pop('image_url', None)
-
         observation = json.dumps({
             "principal": product_for_agent
         })
-
         return observation
     else:
         return json.dumps({})
@@ -336,40 +339,7 @@ async def get_all_products(question: str) -> str:
 
     return observation
 
-# Nueva función para generar una única pregunta de seguimiento
 
-
-async def generate_follow_up_question(question: str, session_id: str = None) -> str:
-    """Genera una pregunta de seguimiento basada en las últimas 20 interacciones."""
-    agent_name = "Sofia"
-    chat_history = MongoDBChatMessageHistory(agent_name, session_id)
-
-    # Obtener las últimas 10 interacciones
-    last_10_messages = await chat_history.aget_messages()
-
-    formatted_messages = "\n".join(
-        [f"{'User' if isinstance(msg, HumanMessage) else 'Sofia'}: {msg.content}" for msg in last_10_messages]
-    )
-
-    follow_up_question_template = """
-    Based on the conversation history and the user's last question, generate a clear and concise follow-up question if necessary.
-    **Conversation History:**
-    {formatted_messages}
-    **User's Original Question:** {question}
-    **Follow-Up Question:**
-    """
-    follow_up_question_prompt = PromptTemplate.from_template(
-        follow_up_question_template)
-    prompt_input = {
-        "formatted_messages": formatted_messages,
-        "question": question
-    }
-
-    chain = follow_up_question_prompt | llm
-    result = await chain.ainvoke(prompt_input)
-    return result.content.strip()
-
-# Definir las herramientas como Herramientas de LangChain
 tools = [
     Tool(
         name="get_principal_product",
@@ -389,13 +359,6 @@ tools = [
         coroutine=get_all_products,
         description="Use this tool to get both main and secondary product recommendations based on the user's question.",
     ),
-    Tool(
-        name="generate_follow_up_question",
-        func=generate_follow_up_question,
-        coroutine=generate_follow_up_question,
-        description="Use this tool to generate a **single** follow-up question for the user when their question is unclear or requires more context.",
-        return_direct=True
-    )
 ]
 
 # === CHANGE ===
@@ -457,24 +420,6 @@ prompt = ChatPromptTemplate.from_messages([
     HumanMessagePromptTemplate.from_template(human_prompt)
 ])
 
-memory = ConversationBufferMemory(
-    memory_key="chat_history",
-    return_messages=True,
-    k=30
-)
 
-agent_executor = initialize_agent(
-    tools=tools,
-    llm=llm,
-    agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
-    verbose=True,
-    memory=memory,
-    agent_kwargs={
-        "system_message": system_prompt,
-    },
-    handle_parsing_errors=True,
-    return_intermediate_steps=True,
-    output_key="output",
-    max_iterations=3,
-    early_stopping_method="generate"
-)
+
+
