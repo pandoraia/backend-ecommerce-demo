@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     # Configuración de MongoDB
     mongo_uri: str
     mongo_db_name: str
-
+    stripe_secret_key: str
+    stripe_public_key: str
+    stripe_webhook_secret: str
     # Configuración de OpenAI
     openai_api_key: str
 

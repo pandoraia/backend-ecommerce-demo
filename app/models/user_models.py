@@ -5,11 +5,12 @@ from typing import Optional, List
 # 📌 Modelo para una dirección
 class Address(BaseModel):
     type: str = Field(..., pattern="^(shipping|billing)$")  # Solo puede ser 'shipping' o 'billing'
-    street: str = Field(..., min_length=5, max_length=100)
+    street: str = Field(..., min_length=2, max_length=100)
     city: str = Field(..., min_length=2, max_length=50)
     state: str = Field(..., min_length=2, max_length=50)
     zip_code: str = Field(..., min_length=3, max_length=10)
     country: str = Field(..., min_length=2, max_length=50)
+    apartament: str = Field(..., min_length=1, max_length=50)
 
 
 # Modelo para la creación de un usuario
@@ -37,3 +38,20 @@ class UserResponse(BaseModel):
     birth_date: datetime
     created_at: datetime
     addresses: Optional[List[Address]] = []
+
+class UpdateUser(BaseModel):
+    first_name: Optional[str] = Field(None, min_length=1, max_length=50)
+    last_name: Optional[str] = Field(None, min_length=1, max_length=50)
+    email: Optional[EmailStr] = None
+    password: Optional[str] = Field(None, min_length=8)
+    confirm_password: Optional[str] = Field(None, min_length=8)
+    country_code: Optional[str] = "+52"  # Valor por defecto
+    phone: Optional[str] = Field(None, pattern=r"^\d{10}$", description="Número de teléfono de 10 dígitos")
+    birth_date: Optional[datetime] = None
+    accept_terms: Optional[bool] = None
+    marketing_preferences: Optional[bool] = True
+    addresses: Optional[List[Address]] = []
+
+    class Config:
+        # Permitir el uso de campos con valores nulos (para hacer la actualización parcial)
+        from_attributes = True

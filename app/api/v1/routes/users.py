@@ -1,7 +1,7 @@
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Query
-from app.services.user_services import register_user, get_all_users, get_user_by_email
-from app.models.user_models import RegisterUser, UserResponse
+from app.services.user_services import register_user, get_all_users, get_user_by_email, update_user
+from app.models.user_models import RegisterUser, UserResponse, UpdateUser
 
 from typing import List, Optional
 router = APIRouter()
@@ -35,3 +35,14 @@ async def get_users_endpoint(email: Optional[str] = Query(None)):
             raise HTTPException(status_code=404, detail="Usuario no encontrado")
         return [user]
     return await get_all_users()
+
+@router.patch("/{user_id}", response_model=UserResponse)
+async def update_user_endpoint(user_id: str, user_data: UpdateUser):
+    """
+    Endpoint para actualizar la información de un usuario.
+    """
+    updated_user = await update_user(user_id, user_data)
+    if not updated_user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    
+    return updated_user
