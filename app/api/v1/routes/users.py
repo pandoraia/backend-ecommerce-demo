@@ -24,7 +24,7 @@ async def register_user_endpoint(user_data: RegisterUser):
     }
 
 
-@router.get("/", response_model=List[UserResponse])
+@router.get("", response_model=List[UserResponse])
 async def get_users_endpoint(email: Optional[str] = Query(None)):
     """
     Endpoint para obtener usuarios. Filtra por email si se proporciona.
